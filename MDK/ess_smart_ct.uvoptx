@@ -210,6 +210,11 @@
           <WinNumber>1</WinNumber>
           <ItemText>buffer</ItemText>
         </Ww>
+        <Ww>
+          <count>11</count>
+          <WinNumber>1</WinNumber>
+          <ItemText>g_hardfault_magic</ItemText>
+        </Ww>
       </WatchWindow1>
       <MemoryWindow1>
         <Mm>

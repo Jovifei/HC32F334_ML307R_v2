@@ -205,10 +205,9 @@ static void App_IntCfg(void)
     NVIC_SetPriority(USART1_IRQn, DDL_IRQ_PRIO_13);
     NVIC_EnableIRQ(USART1_IRQn);
 
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(USART2_IRQn);
-    NVIC_SetPriority(USART2_IRQn, DDL_IRQ_PRIO_12);
-    NVIC_EnableIRQ(USART2_IRQn);
+    /* USART2：ML307R 使用 INTC 绑定 INT010，RX 中断在 uart_at_init() 里再打开。
+       若在此处就 NVIC_EnableIRQ(USART2_IRQn) + USART_INT_RX，可能在 INTC 注册前
+       触发 IRQ010_Handler 且回调仍为 NULL，导致 HardFault/卡死。 */
 
     /* NVIC config */
     NVIC_ClearPendingIRQ(USART3_IRQn);
@@ -354,8 +353,8 @@ static void App_USARTxCfg(void)
     stcUartInit.u32StartBitPolarity = USART_START_BIT_FALLING;
     stcUartInit.u32HWFlowControl = USART_HW_FLOWCTRL_NONE;
     (void)USART_UART_Init(CM_USART2, &stcUartInit, NULL);
-    /* Enable USART_TX | USART_RX | USART_INT_RX function */
-    USART_FuncCmd(CM_USART2, (USART_TX | USART_RX | USART_INT_RX), ENABLE);
+    /* 仅打开收发硬件；RX 中断延后到 uart_at_init()（INTC 注册后再使能） */
+    USART_FuncCmd(CM_USART2, (USART_TX | USART_RX), ENABLE);
 
     /* Enable USART3 clock */
     FCG_Fcg3PeriphClockCmd(FCG3_PERIPH_USART3, ENABLE);

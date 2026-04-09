@@ -372,7 +372,7 @@ static int s_mqtt_msg_id = 0;
 ---------------------------------------------------------------------------*/
 static void publish_device_info(void) {
   const device_credentials_t *cred = device_register_get_credentials();
-  char payload[256];
+  char payload[128];
   snprintf(payload, sizeof(payload),
            "{\"id\":%d,\"method\":\"information\",\"params\":{"
            "\"sn\":\"%s\",\"product_model\":\"%s\","
@@ -391,7 +391,7 @@ static void publish_device_info(void) {
  包含第一路CT有功功率和当日累计发电量。
 ---------------------------------------------------------------------------*/
 static void publish_ct_power(void) {
-  char payload[512];
+  char payload[128];
   snprintf(payload, sizeof(payload),
            "{\"id\":%d,\"method\":\"properties_changed\",\"params\":["
            "{\"siid\":4,\"piid\":7,\"value\":%.1f},"
@@ -514,7 +514,7 @@ static void handle_get_properties(const char *buf, int msg_id) {
   if (n == 0)
     return;
 
-  char resp[512];
+  char resp[256];
   int pos = snprintf(resp, sizeof(resp),
                      "{\"id\":%d,\"method\":\"result\",\"params\":[", msg_id);
 

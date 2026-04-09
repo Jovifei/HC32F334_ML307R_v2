@@ -7,66 +7,148 @@
 #include "main.h"
 #include "mmi.h"
 #include "grid.h"
-#include "wifi.h"
+#include "wifi_info.h"
 #include "sub1g.h"
 #include "debug.h"
 #include "eeprom.h"
 #include "ota_max.h"
 #include "fft.h"
+#include "uart_at.h"
+#include <stdint.h>
 //
 // Globals
 //
 sys_param_t sys_param;
 wifi_info_t wifi_info;
 
-// µçÑ¹»º³åÇø£¨AÏàÖ±½Ó²ÉÑù£¬B/CÏàÍ¨¹ýÏàÎ»ÑÓÊ±´Ó last_ua ÖØ¹¹£©
+// ==================== HardFault ²¶»ñ£¨ÓÃÓÚ¶¨Î»¿¨ËÀµã£© ====================
+
+typedef struct {
+    uint32_t r0;
+    uint32_t r1;
+    uint32_t r2;
+    uint32_t r3;
+    uint32_t r12;
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t psr;
+    uint32_t cfsr;
+    uint32_t hfsr;
+    uint32_t dfsr;
+    uint32_t afsr;
+    uint32_t bfar;
+    uint32_t mmfar;
+    uint32_t icsr;
+    uint32_t shcsr;
+} hardfault_dump_t;
+
+static volatile hardfault_dump_t g_hardfault_dump;
+static volatile uint32_t g_hardfault_magic = 0;
+
+void hardfault_capture_c(uint32_t *stacked_sp)
+{
+    g_hardfault_magic = 0x48464C54u; // 'HFLT'
+
+    g_hardfault_dump.r0  = stacked_sp[0];
+    g_hardfault_dump.r1  = stacked_sp[1];
+    g_hardfault_dump.r2  = stacked_sp[2];
+    g_hardfault_dump.r3  = stacked_sp[3];
+    g_hardfault_dump.r12 = stacked_sp[4];
+    g_hardfault_dump.lr  = stacked_sp[5];
+    g_hardfault_dump.pc  = stacked_sp[6];
+    g_hardfault_dump.psr = stacked_sp[7];
+
+    g_hardfault_dump.cfsr  = SCB->CFSR;
+    g_hardfault_dump.hfsr  = SCB->HFSR;
+    g_hardfault_dump.dfsr  = SCB->DFSR;
+    g_hardfault_dump.afsr  = SCB->AFSR;
+    g_hardfault_dump.bfar  = SCB->BFAR;
+    g_hardfault_dump.mmfar = SCB->MMFAR;
+    g_hardfault_dump.icsr  = SCB->ICSR;
+    g_hardfault_dump.shcsr = SCB->SHCSR;
+
+    __DSB();
+    __ISB();
+
+    // ½øÈëËÀÑ­»·£¬·½±ãµ÷ÊÔÆ÷×¥ÏÖ³¡
+    while (1) {
+        __NOP();
+    }
+}
+
+/* Keil/ARMCC Óë GCC/Clang ¼æÈÝµÄ HardFault Èë¿Ú */
+#if defined(__CC_ARM)
+extern void hardfault_capture_c(uint32_t *stacked_sp);
+__asm void HardFault_Handler(void)
+{
+    IMPORT  hardfault_capture_c
+    TST     LR, #4
+    ITE     EQ
+    MRSEQ   R0, MSP
+    MRSNE   R0, PSP
+    B       hardfault_capture_c
+}
+#else
+__attribute__((naked)) void HardFault_Handler(void)
+{
+    __asm volatile(
+        "tst lr, #4                         \n"
+        "ite eq                             \n"
+        "mrseq r0, msp                      \n"
+        "mrsne r0, psp                      \n"
+        "b hardfault_capture_c              \n"
+    );
+}
+#endif
+
+// ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Aï¿½ï¿½Ö±ï¿½Ó²ï¿½ï¿½ï¿½ï¿½ï¿½B/Cï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½Ê±ï¿½ï¿½ last_ua ï¿½Ø¹ï¿½ï¿½ï¿½
 float ua_voltage_buffer[TOTAL_SAMPLES];
 float last_ua_voltage_buffer[TOTAL_SAMPLES];
 
-// µçÁ÷»º³åÇø
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 float current1_buffer[TOTAL_SAMPLES];
 float current2_buffer[TOTAL_SAMPLES];
 float current3_buffer[TOTAL_SAMPLES];
 
-volatile uint8_t phase_identify_timer_100ms = 0; // ÏàÐòÊ¶±ð100ms¶¨Ê±±êÖ¾
+volatile uint8_t phase_identify_timer_100ms = 0; // ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½100msï¿½ï¿½Ê±ï¿½ï¿½Ö¾
 uint8_t buffer_filled = 0;
 
-// ÄÚ²¿Ë÷Òý±äÁ¿
+// ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 static uint16_t buffer_index = 0;
 
 /*---------------------------------------------------------------------------
  Name        : uint16_t get_voltage_buffer_index(void)
- Input       : ÎÞ
- Output      : µ±Ç°»·ÐÎ»º³åÐ´Ö¸Õë
- Description : ¹© grid.c ÖÐ phase_matching_calculation »ñÈ¡µ±Ç°»º³åÐ´Ö¸Õë£¬
-               ÓÃÓÚ¼ÆËãµçÁ÷»·ÐÎÆðµã£¬Óë last_ua ¿ìÕÕÊ±¼ä´°¶ÔÆë¡£
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½Ç°ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½Ð´Ö¸ï¿½ï¿½
+ Description : ï¿½ï¿½ grid.c ï¿½ï¿½ phase_matching_calculation ï¿½ï¿½È¡ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½Ð´Ö¸ï¿½ë£¬
+               ï¿½ï¿½ï¿½Ú¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã£¬ï¿½ï¿½ last_ua ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ä´°ï¿½ï¿½ï¿½ë¡£
 ---------------------------------------------------------------------------*/
 uint16_t get_voltage_buffer_index(void)
 {
     return buffer_index;
 }
 
-// ¼ÆËãÆðµã¿ìÕÕ£¨ct_task Èë¿Ú´¦Ëø¶¨£¬±ÜÃâÖÐ¶ÏÍÆ½ø buffer_index µ¼ÖÂ RMS/¹¦ÂÊ´°¿Ú²»Ò»ÖÂ£©
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ£ï¿½ct_task ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½Æ½ï¿? buffer_index ï¿½ï¿½ï¿½ï¿½ RMS/ï¿½ï¿½ï¿½Ê´ï¿½ï¿½Ú²ï¿½Ò»ï¿½Â£ï¿½
 static uint16_t s_calc_buf_snap = 0;
 
 /*---------------------------------------------------------------------------
  Name        : uint16_t get_calc_buf_snap(void)
- Input       : ÎÞ
- Output      : ct_task Èë¿Ú¿ìÕÕµÄ buffer_index
- Description : ¹© grid.c ÖÐ phase_identify_process / phase_matching_calculation
-               »ñÈ¡Óë last_ua ¿½±´Ê±ÍêÈ«Ò»ÖÂµÄ»º³å¿ìÕÕÆðµã£¬È·±£µçÑ¹´°¿ÚÓë
-               µçÁ÷´°¿ÚÑÏ¸ñ¶ÔÆë£¬±ÜÃâ buffer_index ³ÖÐøÍÆ½ø´øÀ´µÄÏàÎ»Îó²î¡£
+ Input       : ï¿½ï¿½
+ Output      : ct_task ï¿½ï¿½Ú¿ï¿½ï¿½Õµï¿? buffer_index
+ Description : ï¿½ï¿½ grid.c ï¿½ï¿½ phase_identify_process / phase_matching_calculation
+               ï¿½ï¿½È¡ï¿½ï¿½ last_ua ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½È«Ò»ï¿½ÂµÄ»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã£¬È·ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¸ï¿½ï¿½ï¿½ë£¬ï¿½ï¿½ï¿½ï¿? buffer_index ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½î¡?
 ---------------------------------------------------------------------------*/
 uint16_t get_calc_buf_snap(void)
 {
     return s_calc_buf_snap;
 }
 
-// ¾²Ì¬È«¾Ö±äÁ¿£º3¸öCTµÄÀÛ¼Ó¹¦ÂÊºÍ¼ÆÊý
+// ï¿½ï¿½Ì¬È«ï¿½Ö±ï¿½ï¿½ï¿½ï¿½ï¿½3ï¿½ï¿½CTï¿½ï¿½ï¿½Û¼Ó¹ï¿½ï¿½ÊºÍ¼ï¿½ï¿½ï¿½
 static float ct_power_accum[3] = {0.0f, 0.0f, 0.0f};
 static uint32_t three_phase_broadcast_count = 0;
 
-// º¯ÊýÉùÃ÷£¨ÄÚ²¿º¯Êý£©
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 static void fault_detection_task(void);
 static void ct_power_calculate_task(void);
 static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx);
@@ -81,7 +163,7 @@ static void sub1g_timer_task(void);
  Name        : void main(void)
  Input       : No
  Output      : No
- Description : Ö÷º¯ÊýÈë¿Ú¡£Ö´ÐÐÉè±¸³õÊ¼»¯¡¢GPIOÅäÖÃ¡¢ÖÐ¶ÏÅäÖÃÒÔ¼°¡£
+ Description : ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¡ï¿½Ö´ï¿½ï¿½ï¿½è±¸ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½ï¿½Ã¡ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 int main(void)
 {
@@ -89,21 +171,25 @@ int main(void)
     // SysConfig settings
     //
     board_init();
+
+    // ï¿½ï¿½Ê¼ï¿½ï¿½UART ATï¿½ï¿½é£¨ï¿½ï¿½ï¿½ï¿½board_initÖ®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½ï¿½ï¿½Ö¹USART2ï¿½Ð¶Ï·ï¿½ï¿½ï¿½Î´ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    uart_at_init();
+
     boot_logo_print();
 
-    // ³õÊ¼»¯ÏµÍ³²ÎÊý
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ÏµÍ³ï¿½ï¿½ï¿½ï¿½
     system_param_init();
 
-    // ³õÊ¼»¯ÈýÍ¨µÀFFTÄ£¿é
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½Í¨ï¿½ï¿½FFTÄ£ï¿½ï¿½
     fft_3ch_init();
 
     // run_eeprom_tests();
     int ret = eeprom_init_and_load_devices();
     if (ret == 0)
     {
-        print_device_list(); // ÏÔÊ¾ËùÓÐÉè±¸
+        print_device_list(); // ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½è±¸
 
-        // ÉÏµçÊ±£¬Èç¹ûÎ¢ÄæÒÑÊ¶±ðÏàÎ»£¬·¢ËÍ0x22¸æÖªÎ¢ÄæËùÔÚÏà
+        // ï¿½Ïµï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?0x22ï¿½ï¿½ÖªÎ¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++)
         {
             if (sys_param.paired_inv_info[i].is_valid && sys_param.paired_inv_info[i].phase > 0)
@@ -124,88 +210,91 @@ int main(void)
 
     while (1)
     {
-        // ¼ì²é²¢´¦Àí¹ÊÕÏ¼ì²âÈÎÎñ - 50usµÄADCÖÐ¶ÏÖÐ¸³±êÖ¾
+        // ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ - 50usï¿½ï¿½ADCï¿½Ð¶ï¿½ï¿½Ð¸ï¿½ï¿½ï¿½Ö¾
         if (sys_param.flags.task.fault_check_ready)
         {
             fault_detection_task();
             sys_param.flags.task.fault_check_ready = 0;
         }
 
-        // ¼ì²é²¢´¦Àí×´Ì¬»úÈÎÎñ - 50usµÄADCÖÐ¶ÏÖÐ¸³±êÖ¾
+        // ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿? - 50usï¿½ï¿½ADCï¿½Ð¶ï¿½ï¿½Ð¸ï¿½ï¿½ï¿½Ö¾
         if (sys_param.flags.task.state_machine_ready)
         {
             system_state_machine(&sys_param.grid, &sys_param.ct1, &sys_param.ct2, &sys_param.ct3);
             sys_param.flags.task.state_machine_ready = 0;
         }
 
-        // ¼ÆËãACµçÍøµÄµçÑ¹ÓÐÐ§ÖµºÍÆµÂÊ
+        // ï¿½ï¿½ï¿½ï¿½ACï¿½ï¿½ï¿½ï¿½ï¿½Äµï¿½Ñ¹ï¿½ï¿½Ð§Öµï¿½ï¿½Æµï¿½ï¿½
         grid_task();
 
-        // ¼ì²é²¢´¦ÀíLED¸üÐÂÈÎÎñ
+        // ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½LEDï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         mmi_task();
 
-        // ¼ì²é²¢´¦Àíµ÷ÊÔ·¢ËÍÈÎÎñ
+        // ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         debug_task();
 
-        // ¼ì²é²¢´¦ÀíSNÃüÁî
+        // ï¿½ï¿½é²¢ï¿½ï¿½ï¿½ï¿½SNï¿½ï¿½ï¿½ï¿½
         debug_sn_task();
 
-        // Ö´ÐÐFFT·ÖÎö
+        // Ö´ï¿½ï¿½FFTï¿½ï¿½ï¿½ï¿½
         fft_check_and_analyze();
 
-        // CT¼ÆËãÓÐÐ§ÖµÒÔ¼°¼ì²âÊÇ·ñÇ¯ÔÚÏßÀÂÉÏ£¬²¢¼ÆËã3¸öCTÉÏµÄ¹¦ÂÊ
+        // CTï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð§Öµï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½Ç¯ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?3ï¿½ï¿½CTï¿½ÏµÄ¹ï¿½ï¿½ï¿½
         ct_task();
 
-        // Ê¶±ðÎ¢ÄæÔÚÄÄ¸öCTÉÏ
+        // Ê¶ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½Ä¸ï¿½CTï¿½ï¿½
         inv_phase_detect_fix_direction_task();
 
-        // ¹ã²¥ÈýÏà/µ¥Ïà¹¦ÂÊ
+        // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½/ï¿½ï¿½ï¿½à¹¦ï¿½ï¿½
         boardcast_power_task();
 
-        // ¼ì²éÊÇ·ñÐèÒªFFT²ÉÑù·ÖÎö£¬²¢Ã¿10s¹ã²¥Ò»´Î½ñÈÕÈÕÆÚ
+        // ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ÒªFFTï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¿10sï¿½ã²¥Ò»ï¿½Î½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         broadcast_other_task();
 
-        // UART1·¢ËÍ¶ÓÁÐ´¦Àí
+        // UART1ï¿½ï¿½ï¿½Í¶ï¿½ï¿½Ð´ï¿½ï¿½ï¿½
         uart1_tx_queue_process();
 
-        // ²ÎÊý1s¸üÐÂ
+        // ï¿½ï¿½ï¿½ï¿½UART ATï¿½ï¿½ï¿½Õµï¿½ï¿½ï¿½ï¿½ï¿½
+        uart_at_process();
+
+        // ï¿½ï¿½ï¿½ï¿½1sï¿½ï¿½ï¿½ï¿½
         param_update_1s_task();
 
-        // sub1gÊý¾Ý½ÓÊÕ´¦Àí
+        // sub1gï¿½ï¿½ï¿½Ý½ï¿½ï¿½Õ´ï¿½ï¿½ï¿½
         sub1g_rx_task();
 
-        // sub1g¶¨Ê±Æ÷ÈÎÎñ(ÉÏµç3Ãë»ñÈ¡°æ±¾,Ã¿2Ãë»ñÈ¡RSSI)
+        // sub1gï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(ï¿½Ïµï¿½3ï¿½ï¿½ï¿½È¡ï¿½æ±?,Ã¿2ï¿½ï¿½ï¿½È¡RSSI)
         sub1g_timer_task();
 
-        // µ÷ÓÃOTAÈÎÎñ£¨1msÖÜÆÚ£©
+        // ï¿½ï¿½ï¿½ï¿½OTAï¿½ï¿½ï¿½ï¿½1msï¿½ï¿½ï¿½Ú£ï¿½
         ota_manager_task();
 
-        // UART1·¢ËÍ¶ÓÁÐ´¦Àí
+        // UART1ï¿½ï¿½ï¿½Í¶ï¿½ï¿½Ð´ï¿½ï¿½ï¿½
         uart1_tx_queue_process();
     }
 }
 
 /*---------------------------------------------------------------------------
  Name        : void voltage_and_current_buffer_record(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : µçÑ¹µçÁ÷»·ÐÎ»º³åÇøÌî³äº¯Êý£¬ÔÚADCÖÐ¶Ï£¨50us£©ÖÐµ÷ÓÃ¡£
-               ÖÐ¶ÏÄÚ½ö×öÊý¾ÝÐ´ÈëºÍ»·ÐÎË÷Òý¹ÜÀí£¬²»Ö´ÐÐÈÎºÎ³Ë³ýÔËËãºÍ memcpy£¬
-               ²»ÖÃÎ»ÈÎºÎ¼ÆËã±êÖ¾Î»¡£
-               ËùÓÐ²ÎÊý¸üÐÂ£¨samples_per_cycle¡¢ÏàÎ»ÑÓ³Ù¡¢ÆµÂÊºÏ·¨ÅÐ¶Ï¡¢
-               rms_calc_ready¡¢power_calc_ready£©¾ùÔÚÍ¬Ò»ÖÐ¶ÏÄÚµÄ zero_cross_detect() Íê³É¡£
-               buffer_index ÎªÕæÕýµÄ»·ÐÎÖ¸Õë£¬ÈÆ»Ø TOTAL_SAMPLES ¶ø·ÇÃ¿ÖÜ¹ýÁãµãÇåÁã¡£
-               Èô»º³åÈÆÂúÒ»È¦ÆÚ¼äÎ´³öÏÖÕýÏò¹ýÁã£¨ÆµÂÊ¹ýµÍ£©£¬ÔòÖÃÆµÂÊ¹ÊÕÏ¡£
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½äº¯ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ADCï¿½Ð¶Ï£ï¿½50usï¿½ï¿½ï¿½Ðµï¿½ï¿½Ã¡ï¿½
+               ï¿½Ð¶ï¿½ï¿½Ú½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½Í»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½ï¿½ï¿½ÎºÎ³Ë³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ memcpyï¿½ï¿½
+               ï¿½ï¿½ï¿½ï¿½Î»ï¿½ÎºÎ¼ï¿½ï¿½ï¿½ï¿½Ö¾Î»ï¿½ï¿?
+               ï¿½ï¿½ï¿½Ð²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â£ï¿½samples_per_cycleï¿½ï¿½ï¿½ï¿½Î»ï¿½Ó³Ù¡ï¿½Æµï¿½ÊºÏ·ï¿½ï¿½Ð¶Ï¡ï¿½
+               rms_calc_readyï¿½ï¿½power_calc_readyï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¬Ò»ï¿½Ð¶ï¿½ï¿½Úµï¿½ zero_cross_detect() ï¿½ï¿½É¡ï¿?
+               buffer_index Îªï¿½ï¿½ï¿½ï¿½ï¿½Ä»ï¿½ï¿½ï¿½Ö¸ï¿½ë£¬ï¿½Æ»ï¿½ TOTAL_SAMPLES ï¿½ï¿½ï¿½ï¿½Ã¿ï¿½Ü¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã¡?
+               ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»È¦ï¿½Ú¼ï¿½Î´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã£¨Æµï¿½Ê¹ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½Ê¹ï¿½ï¿½Ï¡ï¿?
 ---------------------------------------------------------------------------*/
 void voltage_and_current_buffer_record(void)
 {
-    // Ð´Èë»·ÐÎ»º³å£¨buffer_index ÒÑ±£Ö¤ÔÚ [0, TOTAL_SAMPLES-1]£¬ÎÞÐèÔ½½ç±£»¤£©
+    // Ð´ï¿½ë»·ï¿½Î»ï¿½ï¿½å£¨buffer_index ï¿½Ñ±ï¿½Ö¤ï¿½ï¿½ [0, TOTAL_SAMPLES-1]ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô½ï¿½ç±£ï¿½ï¿½ï¿½ï¿½
     ua_voltage_buffer[buffer_index] = sys_param.signal.ac_voltage_LPF;
     current1_buffer[buffer_index] = sys_param.signal.ct1_current_LPF;
     current2_buffer[buffer_index] = sys_param.signal.ct2_current_LPF;
     current3_buffer[buffer_index] = sys_param.signal.ct3_current_LPF;
 
-    // ±¾È¦ÊÇ·ñÒÑ¼ûµ½ÕýÏò¹ýÁã£¬ÓÃÓÚÈÆ»ØÊ±¼ì²âµÍÆµ¹ÊÕÏ
+    // ï¿½ï¿½È¦ï¿½Ç·ï¿½ï¿½Ñ¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã£¬ï¿½ï¿½ï¿½ï¿½ï¿½Æ»ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½ï¿½ï¿?
     static uint8_t s_zero_crossed_since_wrap = 0;
     if (sys_param.grid.zero_cross.positive_zero_cross)
     {
@@ -214,27 +303,27 @@ void voltage_and_current_buffer_record(void)
 
     buffer_index++;
 
-    // »·ÐÎÈÆ»Ø
+    // ï¿½ï¿½ï¿½ï¿½ï¿½Æ»ï¿½
     if (buffer_index >= TOTAL_SAMPLES)
     {
         buffer_index = 0;
         buffer_filled = 1;
 
-        // ÈÆÂúÒ»È¦ÈÔÎ´³öÏÖÕýÏò¹ýÁã£ºÆµÂÊ¹ýµÍ£¨< 45Hz£©£¬ÖÃÆµÂÊ¹ÊÕÏ
+        // ï¿½ï¿½ï¿½ï¿½Ò»È¦ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã£ºÆµï¿½Ê¹ï¿½ï¿½Í£ï¿?< 45Hzï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½Ê¹ï¿½ï¿½ï¿½
         if (!s_zero_crossed_since_wrap)
         {
             sys_param.fault.bit.grid_frequency = 1;
         }
-        s_zero_crossed_since_wrap = 0; // ÎªÏÂÒ»È¦¸´Î»
+        s_zero_crossed_since_wrap = 0; // Îªï¿½ï¿½Ò»È¦ï¿½ï¿½Î»
     }
 }
 
 /*---------------------------------------------------------------------------
  Name        : void system_state_machine(...)
- Input       : grid_mgr - µçÍø¹ÜÀíÆ÷
-               ct1, ct2, ct3 - Èý¸öCT²ÎÊý
- Output      : ÎÞ
- Description : µçÍø×´Ì¬»úÖ÷º¯Êý£¨ÔÚwhile(1)ÖÐµ÷ÓÃ£©
+ Input       : grid_mgr - ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               ct1, ct2, ct3 - ï¿½ï¿½ï¿½ï¿½CTï¿½ï¿½ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½while(1)ï¿½Ðµï¿½ï¿½Ã£ï¿½
 ---------------------------------------------------------------------------*/
 void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t *ct2, ct_param_t *ct3)
 {
@@ -244,18 +333,18 @@ void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t 
         __NVIC_SystemReset();
     }
 
-    // // ÏµÍ³Èý/µ¥ÏàÀàÐÍ±ä»¯¼ì²â
+    // // ÏµÍ³ï¿½ï¿½/ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í±ä»¯ï¿½ï¿½ï¿?
     // if (grid_mgr->system_type_changed)
     // {
-    //     // ÏµÍ³ÀàÐÍ±ä»¯,ÖØÐÂ³õÊ¼»¯
+    //     // ÏµÍ³ï¿½ï¿½ï¿½Í±ä»¯,ï¿½ï¿½ï¿½Â³ï¿½Ê¼ï¿½ï¿½
     //     DEBUG_PRINTF("[State Machine] System type changed, re-initializing...\r\n");
 
     //     sys_param.state = SYS_INIT;
 
-    //     // ÖØÖÃÏàÐòÊ¶±ð²ÎÊý
+    //     // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿?
     //     phase_identify_init(&sys_param.grid.phase_id);
 
-    //     // ÖØÖÃ¹¦ÂÊ·½Ïò¼ì²â
+    //     // ï¿½ï¿½ï¿½Ã¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½
     //     ct_power_direction_detect_init(&sys_param.ct1);
     //     ct_power_direction_detect_init(&sys_param.ct2);
     //     ct_power_direction_detect_init(&sys_param.ct3);
@@ -264,25 +353,25 @@ void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t 
     //     return;
     // }
 
-    // ×´Ì¬»úÂß¼­ - Ö»¸ù¾Ý±êÖ¾Î»×ö×´Ì¬ÇÐ»»
+    // ×´Ì¬ï¿½ï¿½ï¿½ß¼ï¿½ - Ö»ï¿½ï¿½ï¿½Ý±ï¿½Ö¾Î»ï¿½ï¿½×´Ì¬ï¿½Ð»ï¿½
     switch (sys_param.state)
     {
-    case SYS_INIT: // Case 0: ¼ì²âACµçÑ¹¹ýÁãºÍµçÍøÆµÂÊ
+    case SYS_INIT: // Case 0: ï¿½ï¿½ï¿½ACï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½Íµï¿½ï¿½ï¿½Æµï¿½ï¿?
 
-        // ÏÈ¼ì²éÆµÂÊÊÇ·ñÓÐ¹ÊÕÏ
+        // ï¿½È¼ï¿½ï¿½Æµï¿½ï¿½ï¿½Ç·ï¿½ï¿½Ð¹ï¿½ï¿½ï¿?
         if (sys_param.fault.bit.grid_frequency)
         {
             sys_param.state = SYS_FREQ_FAULT;
             break;
         }
 
-        if (grid_mgr->zero_cross.zero_cross_count >= ZERO_CROSS_COUNT_TARGET) // ¼ì²âµ½×ã¹»µÄ¹ýÁã´ÎÊýÇÒÎÞ¹ÊÕÏ£¬×´Ì¬×ª»»
+        if (grid_mgr->zero_cross.zero_cross_count >= ZERO_CROSS_COUNT_TARGET) // ï¿½ï¿½âµ½ï¿½ã¹»ï¿½Ä¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Þ¹ï¿½ï¿½Ï£ï¿½×´Ì¬×ªï¿½ï¿½
         {
             sys_param.state = SYS_WAIT_CT;
         }
         break;
 
-    case SYS_WAIT_CT: // Case 1: µÈ´ýCT²åºÃ
+    case SYS_WAIT_CT: // Case 1: ï¿½È´ï¿½CTï¿½ï¿½ï¿?
 
         if (sys_param.grid.phase_id.sequence_k == 0)
         {
@@ -296,16 +385,16 @@ void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t 
         }
         break;
 
-    case SYS_PHASE_IDENTIFY: // Case 2: ÏàÐòÊ¶±ð
+    case SYS_PHASE_IDENTIFY: // Case 2: ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½
 
-        if (grid_mgr->phase_id.identification_valid) // ÏàÐòÊ¶±ðÍê³É£¬Ö±½Ó½øÈëÕý³£ÔËÐÐ
+        if (grid_mgr->phase_id.identification_valid) // ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½É£ï¿½Ö±ï¿½Ó½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         {
-            // ¹Ì¶¨¹¦ÂÊ·½ÏòÎªÕýÏò£¬ÎÞÐè·½Ïò¼ì²â
+            // ï¿½Ì¶ï¿½ï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½è·½ï¿½ï¿½ï¿½ï¿½
             sys_param.ct1.power.direction_detect_complete = 1;
             sys_param.ct2.power.direction_detect_complete = 1;
             sys_param.ct3.power.direction_detect_complete = 1;
 
-            // // ×Ô¶¯Ê¶±ð½á¹û±£´æµ½EEPROM£¨±¾´ÎÔËÐÐÓÐÐ§£¬ÖØÆôºóÈôtag²»Æ¥ÅäÔò»Ø¹éÄ¬ÈÏ1£©
+            // // ï¿½Ô¶ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½æµ½EEPROMï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½tagï¿½ï¿½Æ¥ï¿½ï¿½ï¿½ï¿½Ø¹ï¿½Ä¬ï¿½ï¿?1ï¿½ï¿½
             // eeprom_save_set_param();
 
             printf("[State Machine] Auto phase identify done. CT Mapping: CT1->Phase %c, CT2->Phase %c, CT3->Phase %c\r\n",
@@ -315,57 +404,57 @@ void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t 
 
             sys_param.state = SYS_NORMAL_RUN;
         }
-        // else if (!grid_mgr->ct_connected) // CT¶Ï¿ª£¬·µ»Ø³õÊ¼×´Ì¬
+        // else if (!grid_mgr->ct_connected) // CTï¿½Ï¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø³ï¿½Ê¼×´Ì¬
         // {
         //     DEBUG_PRINTF("[State Machine] Ct Not Connected.\r\n");
         // }
         break;
 
-    case SYS_POWER_DIR_DETECT: // Case 3: ¹¦ÂÊ·½Ïò¼ì²â
+    case SYS_POWER_DIR_DETECT: // Case 3: ï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½
 
-        // ¼ì²éÈý¸öCTµÄ¹¦ÂÊ·½ÏòÊÇ·ñ¶¼ÒÑ¼ì²âÍê³É
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½CTï¿½Ä¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½Ñ¼ï¿½ï¿½ï¿½ï¿½ï¿½
         if (sys_param.ct1.power.direction_detect_complete &&
             sys_param.ct2.power.direction_detect_complete &&
             sys_param.ct3.power.direction_detect_complete)
         {
             if (!grid_mgr->phase_id.relay_opening_pending)
             {
-                // ¿ªÊ¼2Ãë¼ÌµçÆ÷´ò¿ª¹ý³Ì
+                // ï¿½ï¿½Ê¼2ï¿½ï¿½Ìµï¿½ï¿½ï¿½ï¿½ò¿ª¹ï¿½ï¿½ï¿?
                 grid_mgr->phase_id.relay_opening_pending = 1;
                 grid_mgr->phase_id.relay_open_timer_ms = 0;
             }
             else if (grid_mgr->phase_id.relay_open_timer_ms >= 2000)
             {
-                // 2Ãë¼ÌµçÆ÷´ò¿ª¹ý³ÌÍê³É£¬½øÈëÕý³£ÔËÐÐ×´Ì¬
+                // 2ï¿½ï¿½Ìµï¿½ï¿½ï¿½ï¿½ò¿ª¹ï¿½ï¿½ï¿½ï¿½ï¿½É£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
                 grid_mgr->phase_id.relay_opening_pending = 0;
                 grid_mgr->phase_id.relay_open_timer_ms = 0;
                 sys_param.state = SYS_NORMAL_RUN;
                 printf("[State Machine] Power direction detection complete, entering SYS_NORMAL_RUN.\r\n");
             }
         }
-        // else if (!grid_mgr->ct_connected) // CT¶Ï¿ª£¬·µ»Ø³õÊ¼×´Ì¬
+        // else if (!grid_mgr->ct_connected) // CTï¿½Ï¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø³ï¿½Ê¼×´Ì¬
         // {
         //     sys_param.state = SYS_INIT;
-        //     state_machine_partial_reset(); // ²¿·ÖÖØÖÃ²ÎÊý
+        //     state_machine_partial_reset(); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã²ï¿½ï¿½ï¿½
         //     grid_mgr->phase_id.identification_valid = 0;
         // }
         break;
 
-    case SYS_NORMAL_RUN: // Case 4: Õý³£ÔËÐÐ
+    case SYS_NORMAL_RUN: // Case 4: ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
         // if (!grid_mgr->ct_connected)
         // {
-        //     // ¼ì²âµ½CTÎ´²åÈë£¬·µ»ØµÈ´ý×´Ì¬
+        //     // ï¿½ï¿½âµ½CTÎ´ï¿½ï¿½ï¿½ë£¬ï¿½ï¿½ï¿½ØµÈ´ï¿½×´Ì¬
         //     sys_param.state = SYS_INIT;
-        //     state_machine_partial_reset(); // ²¿·ÖÖØÖÃ²ÎÊý
+        //     state_machine_partial_reset(); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã²ï¿½ï¿½ï¿½
         //     grid_mgr->phase_id.identification_valid = 0;
         // }
 
         break;
 
-    case SYS_FREQ_FAULT: // Case 5: µçÍøÆµÂÊ¹ÊÕÏ£¨³¬³ö45Hz-65Hz·¶Î§£©
-        // ÆµÂÊ¹ÊÕÏÓÉÖÐ¶ÏÄÚ zero_cross_detect() ¼ì²â£ººÏ·¨Ê±Çå³ý fault.bit.grid_frequency
-        // ´Ë´¦Á¬Ðø¼ì²â¹ÊÕÏÎ»£¬»Ö¸´ºó»Øµ½ SYS_INIT ÖØÐÂ³õÊ¼»¯
+    case SYS_FREQ_FAULT: // Case 5: ï¿½ï¿½ï¿½ï¿½Æµï¿½Ê¹ï¿½ï¿½Ï£ï¿½ï¿½ï¿½ï¿½ï¿½45Hz-65Hzï¿½ï¿½Î§ï¿½ï¿½
+        // Æµï¿½Ê¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ zero_cross_detect() ï¿½ï¿½â£ºï¿½Ï·ï¿½Ê±ï¿½ï¿½ï¿½ fault.bit.grid_frequency
+        // ï¿½Ë´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½Øµï¿? SYS_INIT ï¿½ï¿½ï¿½Â³ï¿½Ê¼ï¿½ï¿½
         if (sys_param.fault.bit.grid_frequency == 0)
         {
             DEBUG_PRINTF("[State Machine] Grid frequency recovered, back to SYS_INIT.\r\n");
@@ -382,21 +471,21 @@ void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t 
 
 /*---------------------------------------------------------------------------
  Name        : void inv_phase_detect_fix_direction_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ¹¦ÂÊ·½Ïò¼ì²âºÍFFTÊý¾Ý²É¼¯ÈÎÎñ
-               - SYS_POWER_DIR_DETECT×´Ì¬£ºÖ´ÐÐ¹¦ÂÊ·½Ïò¼ì²â
-               - SYS_NORMAL_RUN×´Ì¬£ºÖ´ÐÐFFTÊý¾Ý²É¼¯
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½FFTï¿½ï¿½ï¿½Ý²É¼ï¿½ï¿½ï¿½ï¿½ï¿½
+               - SYS_POWER_DIR_DETECT×´Ì¬ï¿½ï¿½Ö´ï¿½Ð¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½
+               - SYS_NORMAL_RUN×´Ì¬ï¿½ï¿½Ö´ï¿½ï¿½FFTï¿½ï¿½ï¿½Ý²É¼ï¿½
 ---------------------------------------------------------------------------*/
 void inv_phase_detect_fix_direction_task(void)
 {
-    // Ô¤ÏÈ¼ÆËãFFT²É¼¯Ìõ¼þ£¬±ÜÃâÔÚÃ¿¸öCT´¦ÀíÖÐÖØ¸´ÅÐ¶Ï
+    // Ô¤ï¿½È¼ï¿½ï¿½ï¿½FFTï¿½É¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¿ï¿½ï¿½CTï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ø¸ï¿½ï¿½Ð¶ï¿½
     bool fft_collect_enabled = (sys_param.state == SYS_NORMAL_RUN) && (sys_param.grid.phase_id.sequence_k > 0) && (sys_param.fft_identify.enable_collect == 1);
 
-    // CT1¹¦ÂÊ´¦Àí
+    // CT1ï¿½ï¿½ï¿½Ê´ï¿½ï¿½ï¿½
     if (sys_param.ct1.power.power_ready)
     {
-        // ÔÚ¹¦ÂÊ·½Ïò¼ì²â×´Ì¬ÏÂ½øÐÐ¹¦ÂÊ·½Ïò¼ì²â
+        // ï¿½Ú¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Â½ï¿½ï¿½Ð¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½
         if (sys_param.state == SYS_POWER_DIR_DETECT)
         {
             ct_power_direction_detect_process(&sys_param.ct1);
@@ -404,17 +493,17 @@ void inv_phase_detect_fix_direction_task(void)
 
         sys_param.ct1.power.power_ready = 0;
 
-        // FFTÊý¾Ý²É¼¯£¨½öÔÚÂú×ãÇ°ÖÃÌõ¼þÊ±£©
+        // FFTï¿½ï¿½ï¿½Ý²É¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
         if (fft_collect_enabled)
         {
             fft_collect_power_data_3ch(CT_CHANNEL_1, sys_param.ct1.power.fix_dir_power);
         }
     }
 
-    // CT2¹¦ÂÊ´¦Àí
+    // CT2ï¿½ï¿½ï¿½Ê´ï¿½ï¿½ï¿½
     if (sys_param.ct2.power.power_ready)
     {
-        // ÔÚ¹¦ÂÊ·½Ïò¼ì²â×´Ì¬ÏÂ½øÐÐ¹¦ÂÊ·½Ïò¼ì²â
+        // ï¿½Ú¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Â½ï¿½ï¿½Ð¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½
         if (sys_param.state == SYS_POWER_DIR_DETECT)
         {
             ct_power_direction_detect_process(&sys_param.ct2);
@@ -422,17 +511,17 @@ void inv_phase_detect_fix_direction_task(void)
 
         sys_param.ct2.power.power_ready = 0;
 
-        // FFTÊý¾Ý²É¼¯£¨½öÔÚÂú×ãÇ°ÖÃÌõ¼þÊ±£©
+        // FFTï¿½ï¿½ï¿½Ý²É¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
         if (fft_collect_enabled)
         {
             fft_collect_power_data_3ch(CT_CHANNEL_2, sys_param.ct2.power.fix_dir_power);
         }
     }
 
-    //  CT3¹¦ÂÊ´¦Àí
+    //  CT3ï¿½ï¿½ï¿½Ê´ï¿½ï¿½ï¿½
     if (sys_param.ct3.power.power_ready)
     {
-        // ÔÚ¹¦ÂÊ·½Ïò¼ì²â×´Ì¬ÏÂ½øÐÐ¹¦ÂÊ·½Ïò¼ì²â
+        // ï¿½Ú¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Â½ï¿½ï¿½Ð¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½
         if (sys_param.state == SYS_POWER_DIR_DETECT)
         {
             ct_power_direction_detect_process(&sys_param.ct3);
@@ -440,7 +529,7 @@ void inv_phase_detect_fix_direction_task(void)
 
         sys_param.ct3.power.power_ready = 0;
 
-        // FFTÊý¾Ý²É¼¯£¨½öÔÚÂú×ãÇ°ÖÃÌõ¼þÊ±£©
+        // FFTï¿½ï¿½ï¿½Ý²É¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
         if (fft_collect_enabled)
         {
             fft_collect_power_data_3ch(CT_CHANNEL_3, sys_param.ct3.power.fix_dir_power);
@@ -450,39 +539,39 @@ void inv_phase_detect_fix_direction_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : CTÈÎÎñ´¦Àíº¯Êý¡£
-               Èë¿Ú´¦¿ìÕÕ buffer_index£¬±ÜÃâÖÐ¶ÏÔÚÔËËã¹ý³ÌÖÐÍÆ½øÖ¸Õëµ¼ÖÂ´°¿ÚÆ¯ÒÆ¡£
-               ÏÈ copy ua »·ÐÎ¿ìÕÕµ½ last_ua ÏßÐÔ»º³å£¬ÔÙ¼ÆËã RMS£¬ÔÙ¼ÆËã¹¦ÂÊºÍ PF£¬
-               È·±£ÈýÕßÊ¹ÓÃÏàÍ¬µÄÊ±¼ä´°£¬ÇÒ PF = P/(V_rms*I_rms) Ê¹ÓÃ±¾ÖÜÆÚ RMS¡£
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : CTï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿? buffer_indexï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½Ö¸ï¿½ëµ¼ï¿½Â´ï¿½ï¿½ï¿½Æ¯ï¿½Æ¡ï¿?
+               ï¿½ï¿½ copy ua ï¿½ï¿½ï¿½Î¿ï¿½ï¿½Õµï¿½ last_ua ï¿½ï¿½ï¿½Ô»ï¿½ï¿½å£¬ï¿½Ù¼ï¿½ï¿½ï¿½ RMSï¿½ï¿½ï¿½Ù¼ï¿½ï¿½ã¹¦ï¿½Êºï¿½ PFï¿½ï¿½
+               È·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½Ê±ï¿½ä´°ï¿½ï¿½ï¿½ï¿½ PF = P/(V_rms*I_rms) Ê¹ï¿½Ã±ï¿½ï¿½ï¿½ï¿½ï¿½ RMSï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void ct_task(void)
 {
-    // Èô±¾ÖÜÆÚÓÐ RMS »ò¹¦ÂÊ¼ÆËãÈÎÎñ£¬Èë¿ÚÏÈËø¶¨ buffer_index ¿ìÕÕ
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ RMS ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿? buffer_index ï¿½ï¿½ï¿½ï¿½
     if (sys_param.flags.rms_calc_ready || sys_param.flags.task.power_calc_ready)
     {
-        s_calc_buf_snap = buffer_index; // ¿ìÕÕ£¬ºóÐø¼ÆËã¾ù»ùÓÚ´ËÆðµã
+        s_calc_buf_snap = buffer_index; // ï¿½ï¿½ï¿½Õ£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ï¿½ï¿½ï¿½
         uint16_t spc = sys_param.grid.samples_per_cycle;
         if (spc > 0 && spc <= TOTAL_SAMPLES && sys_param.grid.zero_cross.frequency_valid)
         {
-            // ½« ua »·ÐÎ»º³å×î½ü spc µãÏßÐÔÕ¹¿ªµ½ last_ua[0..spc-1]
+            // ï¿½ï¿½ ua ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿? spc ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¹ï¿½ï¿½ï¿½ï¿½ last_ua[0..spc-1]
             copy_ua_ring_to_last_ua_linear(spc, s_calc_buf_snap);
         }
     }
 
-    // 1. ÏÈ¼ÆËã RMS£¨Óë¹¦ÂÊ´¥·¢Í¬ÖÜÆÚ£¬ÏÈËã RMS ±£Ö¤ PF Ê¹ÓÃ×îÐÂÖµ£©
+    // 1. ï¿½È¼ï¿½ï¿½ï¿½ RMSï¿½ï¿½ï¿½ë¹¦ï¿½Ê´ï¿½ï¿½ï¿½Í¬ï¿½ï¿½ï¿½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ RMS ï¿½ï¿½Ö¤ PF Ê¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½
     if (sys_param.flags.rms_calc_ready)
     {
         ct_rms_calculate();
         sys_param.flags.rms_calc_ready = 0;
 
-        // ÅÐ¶ÏÊÇ·ñÇ¯ÔÚµçÏßÉÏ
+        // ï¿½Ð¶ï¿½ï¿½Ç·ï¿½Ç¯ï¿½Úµï¿½ï¿½ï¿½ï¿½ï¿½
         ct_online_detect_process(&sys_param.ct1, sys_param.ct1.rms_value);
         ct_online_detect_process(&sys_param.ct2, sys_param.ct2.rms_value);
         ct_online_detect_process(&sys_param.ct3, sys_param.ct3.rms_value);
 
-        // Í³¼ÆÔÚÏßCTÊýÁ¿
+        // Í³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½CTï¿½ï¿½ï¿½ï¿½
         sys_param.grid.online_ct_count = 0;
 
         if (sys_param.ct1.status.connect_status == CT_STATUS_ONLINE)
@@ -492,14 +581,14 @@ void ct_task(void)
         if (sys_param.ct3.status.connect_status == CT_STATUS_ONLINE)
             sys_param.grid.online_ct_count++;
 
-        // ¸üÐÂCTÁ¬½Ó±êÖ¾
+        // ï¿½ï¿½ï¿½ï¿½CTï¿½ï¿½ï¿½Ó±ï¿½Ö¾
         sys_param.grid.ct_connected = (sys_param.grid.online_ct_count > 0);
 
-        // ÅÐ¶ÏÏµÍ³ÀàÐÍ£¨ÈýÏà/µ¥Ïà£©
+        // ï¿½Ð¶ï¿½ÏµÍ³ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½ï¿½/ï¿½ï¿½ï¿½à£©
         static bool last_is_three_phase = false;
         bool current_is_three_phase;
 
-        // µ¥Ïà¿ÉÒÔ±ä³ÉÈýÏà£¬ÈýÏàÊ¶±ð²»¿É±äÎªµ¥Ïà
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½ï¿½à£¬ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ð²»¿É±ï¿½Îªï¿½ï¿½ï¿½ï¿½
         if (sys_param.grid.online_ct_count >= 2)
         {
             current_is_three_phase = true;
@@ -510,10 +599,10 @@ void ct_task(void)
         }
         else
         {
-            current_is_three_phase = sys_param.is_three_phase; // ±£³ÖÔ­ÓÐ×´Ì¬
+            current_is_three_phase = sys_param.is_three_phase; // ï¿½ï¿½ï¿½ï¿½Ô­ï¿½ï¿½×´Ì¬
         }
 
-        // ¸üÐÂÏµÍ³ÀàÐÍ
+        // ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½ï¿½ï¿½ï¿½
         if (sys_param.grid.online_ct_count > 0)
         {
             sys_param.is_three_phase = current_is_three_phase;
@@ -521,57 +610,57 @@ void ct_task(void)
         }
     }
 
-    // 2. ÔÙ¼ÆËã¹¦ÂÊºÍ PF£¨ÒÀÀµÉÏÃæ¸Õ¸üÐÂµÄ rms_value£©
+    // 2. ï¿½Ù¼ï¿½ï¿½ã¹¦ï¿½Êºï¿½ PFï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¸ï¿½ï¿½Âµï¿? rms_valueï¿½ï¿½
     if (sys_param.flags.task.power_calc_ready)
     {
-        // ÈýÏà¹¦ÂÊ¼°¹¦ÂÊÒòÊý¼ÆËãÈÎÎñ
+        // ï¿½ï¿½ï¿½à¹¦ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         ct_power_calculate_task();
 
-        // ÏàÐòÊ¶±ðÔÚ´Ë´¦µ÷ÓÃ£ºlast_ua¿ìÕÕ¡¢s_calc_buf_snap¡¢RMS¾ùÒÑÔÚ±¾ÂÖ×¼±¸¾ÍÐ÷
+        // ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½Ú´Ë´ï¿½ï¿½ï¿½ï¿½Ã£ï¿½last_uaï¿½ï¿½ï¿½Õ¡ï¿½s_calc_buf_snapï¿½ï¿½RMSï¿½ï¿½ï¿½ï¿½ï¿½Ú±ï¿½ï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         phase_identify_process(&sys_param.grid.phase_id);
 
         sys_param.flags.task.power_calc_ready = 0;
 
-        // Ã¿¸öµçÍøÖÜÆÚ¹¦ÂÊ¼ÆËãÍê³Éºó£¬ÖÃÎ»¹ã²¥´¥·¢±êÖ¾
+        // Ã¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¹ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½Éºï¿½ï¿½ï¿½Î»ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö?
         sys_param.flags.task.power_cycle_ready = 1;
     }
 }
 
 /*---------------------------------------------------------------------------
  Name        : void adc_sample_and_process(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ADC²ÉÑùºÍÐÅºÅ´¦Àíº¯Êý
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ADCï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÅºÅ´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void adc_sample_and_process(void)
 {
-    // ==========================Ô­Ê¼ÐÅºÅ²ÉÑù==========================
+    // ==========================Ô­Ê¼ï¿½ÅºÅ²ï¿½ï¿½ï¿½==========================
     sys_param.signal.adc1_raw[0] = ADC_GetValue(CM_ADC1, ADC_CH0); // I_CT1
     sys_param.signal.adc1_raw[1] = ADC_GetValue(CM_ADC1, ADC_CH1); // I_CT2
     sys_param.signal.adc1_raw[2] = ADC_GetValue(CM_ADC1, ADC_CH2); // I_CT3
     sys_param.signal.adc1_raw[3] = ADC_GetValue(CM_ADC1, ADC_CH3); // V_AC
     sys_param.signal.adc1_raw[4] = ADC_GetValue(CM_ADC1, ADC_CH4); // V_1.65V
 
-    // ==========================µÍÍ¨ÂË²¨==========================
-    sys_param.signal.adc1_raw_LPF[0] = KLPF_Function_Float(sys_param.signal.adc1_raw[0], 0.3f, 0); // I_CT1ÂË²¨Öµ
-    sys_param.signal.adc1_raw_LPF[1] = KLPF_Function_Float(sys_param.signal.adc1_raw[1], 0.3f, 1); // I_CT2ÂË²¨Öµ
-    sys_param.signal.adc1_raw_LPF[2] = KLPF_Function_Float(sys_param.signal.adc1_raw[2], 0.3f, 2); // I_CT3ÂË²¨Öµ
-    sys_param.signal.adc1_raw_LPF[3] = KLPF_Function_Float(sys_param.signal.adc1_raw[3], 0.3f, 3); // V_ACÂË²¨Öµ
-    sys_param.signal.adc1_raw_LPF[4] = KLPF_Function_Float(sys_param.signal.adc1_raw[4], 0.3f, 4); // V_1.65VÂË²¨Öµ
+    // ==========================ï¿½ï¿½Í¨ï¿½Ë²ï¿½==========================
+    sys_param.signal.adc1_raw_LPF[0] = KLPF_Function_Float(sys_param.signal.adc1_raw[0], 0.3f, 0); // I_CT1ï¿½Ë²ï¿½Öµ
+    sys_param.signal.adc1_raw_LPF[1] = KLPF_Function_Float(sys_param.signal.adc1_raw[1], 0.3f, 1); // I_CT2ï¿½Ë²ï¿½Öµ
+    sys_param.signal.adc1_raw_LPF[2] = KLPF_Function_Float(sys_param.signal.adc1_raw[2], 0.3f, 2); // I_CT3ï¿½Ë²ï¿½Öµ
+    sys_param.signal.adc1_raw_LPF[3] = KLPF_Function_Float(sys_param.signal.adc1_raw[3], 0.3f, 3); // V_ACï¿½Ë²ï¿½Öµ
+    sys_param.signal.adc1_raw_LPF[4] = KLPF_Function_Float(sys_param.signal.adc1_raw[4], 0.3f, 4); // V_1.65Vï¿½Ë²ï¿½Öµ
 
-    // ==========================Êý¾Ý´¦Àí==========================
-    // ½»Á÷µçÑ¹×ª»»£º×ª»»ÏµÊý ADC/4096*3300mV*0.2667(V/mV)
+    // ==========================ï¿½ï¿½ï¿½Ý´ï¿½ï¿½ï¿½==========================
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¹×ªï¿½ï¿½ï¿½ï¿½×ªï¿½ï¿½Ïµï¿½ï¿½ ADC/4096*3300mV*0.2667(V/mV)
     sys_param.signal.ac_voltage = (float)((int)sys_param.signal.adc1_raw[3] - (int)sys_param.signal.adc1_raw[4]) * 0.2149f;
 
-    // ÈýÂ·µçÁ÷»¥¸ÐÆ÷×ª»»£º×ª»»ÏµÊý ADC/4096*3300mV*0.025(A/mV)
+    // ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×ªï¿½ï¿½ï¿½ï¿½×ªï¿½ï¿½Ïµï¿½ï¿½ ADC/4096*3300mV*0.025(A/mV)
     sys_param.signal.ct1_current = (float)((int)sys_param.signal.adc1_raw[0] - (int)sys_param.signal.adc1_raw[4]) * 0.0201416f;
     sys_param.signal.ct2_current = (float)((int)sys_param.signal.adc1_raw[1] - (int)sys_param.signal.adc1_raw[4]) * 0.0201416f;
     sys_param.signal.ct3_current = (float)((int)sys_param.signal.adc1_raw[2] - (int)sys_param.signal.adc1_raw[4]) * 0.0201416f;
 
-    // 1.65V²Î¿¼µçÑ¹×ª»»£ºADC/4096*3.3V
+    // 1.65Vï¿½Î¿ï¿½ï¿½ï¿½Ñ¹×ªï¿½ï¿½ï¿½ï¿½ADC/4096*3.3V
     sys_param.signal.v1p65_voltage = (float)sys_param.signal.adc1_raw[4] * 0.000806f;
 
-    // ==========================ÂË²¨ºóµÄÊý¾Ý´¦Àí==========================
+    // ==========================ï¿½Ë²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý´ï¿½ï¿½ï¿?==========================
     sys_param.signal.ac_voltage_LPF = (float)((int)sys_param.signal.adc1_raw_LPF[3] - (int)sys_param.signal.adc1_raw_LPF[4]) * 0.2149f;
     sys_param.signal.ct1_current_LPF = (float)((int)sys_param.signal.adc1_raw_LPF[0] - (int)sys_param.signal.adc1_raw_LPF[4]) * 0.0201416f;
     sys_param.signal.ct2_current_LPF = (float)((int)sys_param.signal.adc1_raw_LPF[1] - (int)sys_param.signal.adc1_raw_LPF[4]) * 0.0201416f;
@@ -581,10 +670,10 @@ void adc_sample_and_process(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_rms_calculate(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ÓÐÐ§Öµ¼ÆËã£¬Ê¹ÓÃ s_calc_buf_snap ×÷Îª»·ÐÎ»º³åÆðµã£¬
-               È¡×î½ü spc ¸öÑù±¾¼ÆËã RMS£¬Ö§³Ö50Hz/60Hz×ÔÊÊÓ¦¡£
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½Ð§Öµï¿½ï¿½ï¿½ã£¬Ê¹ï¿½ï¿½ s_calc_buf_snap ï¿½ï¿½Îªï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ã£?
+               È¡ï¿½ï¿½ï¿? spc ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ RMSï¿½ï¿½Ö§ï¿½ï¿½50Hz/60Hzï¿½ï¿½ï¿½ï¿½Ó¦ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void ct_rms_calculate(void)
 {
@@ -599,29 +688,29 @@ void ct_rms_calculate(void)
 
 /*---------------------------------------------------------------------------
  Name        : void set_task_flags_from_interrupt(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ´ÓÖÐ¶ÏÉèÖÃÈÎÎñ±êÖ¾Î»£¬ÈÃÖ÷Ñ­»·´¦Àí¸´ÔÓÒµÎñÂß¼­
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òµï¿½ï¿½ï¿½ß¼ï¿?
 ---------------------------------------------------------------------------*/
 void set_task_flags_from_interrupt(void)
 {
-    // Ã¿´ÎADCÖÐ¶Ï¶¼ÐèÒª¼ì²é¹ÊÕÏ
+    // Ã¿ï¿½ï¿½ADCï¿½Ð¶Ï¶ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     sys_param.flags.task.fault_check_ready = 1;
 
-    // Ã¿´ÎADCÖÐ¶Ï¶¼ÐèÒª´¦Àí×´Ì¬»ú
+    // Ã¿ï¿½ï¿½ADCï¿½Ð¶Ï¶ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½
     sys_param.flags.task.state_machine_ready = 1;
 
-    // ×¢Òâ£ºct_phase_identify_ready ÒÑ·ÏÆú£¬ÏàÐòÊ¶±ðÓÉ ct_task ÄÚ power_calc_ready ´¥·¢
+    // ×¢ï¿½â£ºct_phase_identify_ready ï¿½Ñ·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ ct_task ï¿½ï¿½ power_calc_ready ï¿½ï¿½ï¿½ï¿½
 }
 
 /*---------------------------------------------------------------------------
  Name        : static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
- Input       : spc      - ±¾ÖÜÆÚ²ÉÑùµãÊý
-               snap_idx - ct_task Èë¿Ú¿ìÕÕµÄ buffer_index
- Output      : ÎÞ
- Description : ½« ua_voltage_buffer »·ÐÎ»º³åÖÐ×î½ü spc ¸öÑù±¾ÏßÐÔÕ¹¿ª¿½±´µ½
-               last_ua_voltage_buffer[0..spc-1]£¬¹© B/C Ïà¹¦ÂÊ/ÏàÐò¼ÆËãÊ¹ÓÃ¡£
-               Æðµã = (snap_idx + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES
+ Input       : spc      - ï¿½ï¿½ï¿½ï¿½ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               snap_idx - ct_task ï¿½ï¿½Ú¿ï¿½ï¿½Õµï¿? buffer_index
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ ua_voltage_buffer ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿? spc ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               last_ua_voltage_buffer[0..spc-1]ï¿½ï¿½ï¿½ï¿½ B/C ï¿½à¹¦ï¿½ï¿½/ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½Ã¡ï¿?
+               ï¿½ï¿½ï¿? = (snap_idx + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES
 ---------------------------------------------------------------------------*/
 static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
 {
@@ -638,15 +727,15 @@ static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
 
 /*---------------------------------------------------------------------------
  Name        : static void ct_power_calculate_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ÈýÏà¹¦ÂÊ¼°¹¦ÂÊÒòÊý¼ÆËãÈÎÎñ£¨ÔÚÖ÷Ñ­»·ÖÐµ÷ÓÃ£©¡£
-               ÔËÐÐÌõ¼þ£º¹¦ÂÊ·½Ïò¼ì²â»òÕý³£ÔËÐÐ×´Ì¬ + ÏàÐòÊ¶±ðÓÐÐ§ + »º³åÇøÒÑÌî³ä
-                        + frequency_valid + !frequency_fault¡£
-               Ê¹ÓÃ s_calc_buf_snap È·¶¨»·ÐÎµçÁ÷»º³åÆðµã¡£
-               A/B/C ÈýÏàµçÑ¹¾ù´Ó last_ua_voltage_buffer[0..spc-1]£¨ÏßÐÔ¿ìÕÕ£©È¡Öµ£¬
-               ±£Ö¤ÓëµçÁ÷µÄÊ±¼ä´°ÍêÈ«¶ÔÆë£¬Ïû³ý buffer_index ÍÆ½øÒýÆðµÄÏàÎ»Æ¯ÒÆ¡£
-               PF = avg_power / (ua_vol_rms * ct_rms_value)£¬¼ÆËã½á¹ûÏÞ·ùµ½[-1,1]¡£
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ï¿½à¹¦ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½Ðµï¿½ï¿½Ã£ï¿½ï¿½ï¿½
+               ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì? + ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½Ð§ + ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
+                        + frequency_valid + !frequency_faultï¿½ï¿½
+               Ê¹ï¿½ï¿½ s_calc_buf_snap È·ï¿½ï¿½ï¿½ï¿½ï¿½Îµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã¡?
+               A/B/C ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿? last_ua_voltage_buffer[0..spc-1]ï¿½ï¿½ï¿½ï¿½ï¿½Ô¿ï¿½ï¿½Õ£ï¿½È¡Öµï¿½ï¿½
+               ï¿½ï¿½Ö¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ä´°ï¿½ï¿½È«ï¿½ï¿½ï¿½ë£¬ï¿½ï¿½ï¿½ï¿? buffer_index ï¿½Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»Æ¯ï¿½Æ¡ï¿?
+               PF = avg_power / (ua_vol_rms * ct_rms_value)ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Þ·ï¿½ï¿½ï¿½[-1,1]ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 static void ct_power_calculate_task(void)
 {
@@ -672,14 +761,14 @@ static void ct_power_calculate_task(void)
     uint8_t ct2_phase = sys_param.grid.phase_id.ct_to_phase[1];
     uint8_t ct3_phase = sys_param.grid.phase_id.ct_to_phase[2];
 
-    // »·ÐÎµçÁ÷»º³åÆðµã£¨Óë RMS Ê¹ÓÃÍ¬Ò»¿ìÕÕ£©
+    // ï¿½ï¿½ï¿½Îµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã£¨ï¿½ï¿? RMS Ê¹ï¿½ï¿½Í¬Ò»ï¿½ï¿½ï¿½Õ£ï¿½
     uint16_t curr_start = (uint16_t)((s_calc_buf_snap + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES);
 
     float sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
 
     for (uint16_t i = 0; i < spc; i++)
     {
-        // ÈýÏàµçÑ¹¾ù´Ó last_ua ÏßÐÔ¿ìÕÕÈ¡Öµ£¬±£Ö¤ÓëµçÁ÷Ê±¼ä´°¶ÔÆë
+        // ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿? last_ua ï¿½ï¿½ï¿½Ô¿ï¿½ï¿½ï¿½È¡Öµï¿½ï¿½ï¿½ï¿½Ö¤ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ä´°ï¿½ï¿½ï¿½ï¿?
         float va = last_ua_voltage_buffer[i];
         float vb = last_ua_voltage_buffer[(i + spc - pb) % spc];
         float vc = last_ua_voltage_buffer[(i + spc - pc) % spc];
@@ -689,14 +778,14 @@ static void ct_power_calculate_task(void)
         phase_voltage[1] = vb;
         phase_voltage[2] = vc;
 
-        // µçÁ÷´Ó»·ÐÎ»º³å°´¿ìÕÕÆðµãÈ¡Öµ
+        // ï¿½ï¿½ï¿½ï¿½ï¿½Ó»ï¿½ï¿½Î»ï¿½ï¿½å°´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡Ö?
         uint16_t ci = (curr_start + i) % TOTAL_SAMPLES;
         sum1 += phase_voltage[ct1_phase] * current1_buffer[ci];
         sum2 += phase_voltage[ct2_phase] * current2_buffer[ci];
         sum3 += phase_voltage[ct3_phase] * current3_buffer[ci];
     }
 
-    // ---- ½áËãÈýÂ·ÓÐ¹¦¹¦ÂÊ ----
+    // ---- ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½Ð¹ï¿½ï¿½ï¿½ï¿½ï¿½ ----
     float inv_spc = 1.0f / (float)spc;
 
     sys_param.ct1.power.avg_power = sum1 * inv_spc;
@@ -717,7 +806,7 @@ static void ct_power_calculate_task(void)
     sys_param.ct3.power.sum_power = 0.0f;
     sys_param.ct3.power.power_sample_count = 0;
 
-    // ---- ¼ÆËã¹¦ÂÊÒòÊý PF = P / (V_rms * I_rms) ----
+    // ---- ï¿½ï¿½ï¿½ã¹¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ PF = P / (V_rms * I_rms) ----
     float v_rms = sys_param.grid.ua_vol_rms;
     if (v_rms > 0.1f)
     {
@@ -750,7 +839,7 @@ static void ct_power_calculate_task(void)
         }
     }
 
-    // ---- µ¥ÏàÏµÍ³ÖÐ£¬²»ÔÚÏßµÄCT¹¦ÂÊ/PFÇåÁã ----
+    // ---- ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ßµï¿½CTï¿½ï¿½ï¿½ï¿½/PFï¿½ï¿½ï¿½ï¿½ ----
     if (!sys_param.is_three_phase)
     {
         if (sys_param.ct1.status.connect_status != CT_STATUS_ONLINE)
@@ -776,21 +865,21 @@ static void ct_power_calculate_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void fault_detection_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ÏµÍ³¹ÊÕÏ¼ì²âÖ÷º¯Êý
-               ¼ì²â½»Á÷µçÑ¹¡¢ÈýÂ·µçÁ÷¡¢²Î¿¼µçÑ¹ÊÇ·ñ´æÔÚ¹ÊÕÏ
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ÏµÍ³ï¿½ï¿½ï¿½Ï¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
+               ï¿½ï¿½â½»ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î¿ï¿½ï¿½ï¿½Ñ¹ï¿½Ç·ï¿½ï¿½ï¿½Ú¹ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 static void fault_detection_task(void)
 {
-    // ¾²Ì¬¹ÊÕÏ¼ÆÊýÆ÷
+    // ï¿½ï¿½Ì¬ï¿½ï¿½ï¿½Ï¼ï¿½ï¿½ï¿½ï¿½ï¿½
     static uint16_t ac_fault_count = 0;
     static uint16_t ct1_fault_count = 0;
     static uint16_t ct2_fault_count = 0;
     static uint16_t ct3_fault_count = 0;
     static uint16_t v1p65_fault_count = 0;
 
-    // ½»Á÷µçÑ¹¹ÊÕÏ¼ì²â£¨>380V »ò <176V£©
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½Ï¼ï¿½â£?>380V ï¿½ï¿½ <176Vï¿½ï¿½
     if ((fabsf(sys_param.signal.ac_voltage) > FAULT_TH_AC_V_HIGH) ||
         (sys_param.grid.ua_vol_rms < FAULT_TH_AC_V_LOW))
     {
@@ -806,12 +895,12 @@ static void fault_detection_task(void)
     }
     else
     {
-        ac_fault_count = 0; // ÇåÁã¼ÆÊýÆ÷
+        ac_fault_count = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         if (sys_param.fault_delay > FAULT_DELAY_S)
             sys_param.fault.bit.ac_sample = 0;
     }
 
-    // CT1µçÁ÷»¥¸ÐÆ÷¹ÊÕÏ¼ì²â£¨>60A£©
+    // CT1ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¼ï¿½â£?>60Aï¿½ï¿½
     if (fabsf(sys_param.signal.ct1_current) > FAULT_TH_CT_I_HIGH)
     {
         ct1_fault_count++;
@@ -826,12 +915,12 @@ static void fault_detection_task(void)
     }
     else
     {
-        ct1_fault_count = 0; // ÇåÁã¼ÆÊýÆ÷
+        ct1_fault_count = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         if (sys_param.fault_delay > FAULT_DELAY_S)
             sys_param.fault.bit.ct1_sample = 0;
     }
 
-    // CT2µçÁ÷»¥¸ÐÆ÷¹ÊÕÏ¼ì²â£¨>60A£©
+    // CT2ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¼ï¿½â£?>60Aï¿½ï¿½
     if (fabsf(sys_param.signal.ct2_current) > FAULT_TH_CT_I_HIGH)
     {
         ct2_fault_count++;
@@ -846,12 +935,12 @@ static void fault_detection_task(void)
     }
     else
     {
-        ct2_fault_count = 0; // ÇåÁã¼ÆÊýÆ÷
+        ct2_fault_count = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         if (sys_param.fault_delay > FAULT_DELAY_S)
             sys_param.fault.bit.ct2_sample = 0;
     }
 
-    // CT3µçÁ÷»¥¸ÐÆ÷¹ÊÕÏ¼ì²â£¨>60A£©
+    // CT3ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¼ï¿½â£?>60Aï¿½ï¿½
     if (fabsf(sys_param.signal.ct3_current) > FAULT_TH_CT_I_HIGH)
     {
         ct3_fault_count++;
@@ -866,12 +955,12 @@ static void fault_detection_task(void)
     }
     else
     {
-        ct3_fault_count = 0; // ÇåÁã¼ÆÊýÆ÷
+        ct3_fault_count = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         if (sys_param.fault_delay > FAULT_DELAY_S)
             sys_param.fault.bit.ct3_sample = 0;
     }
 
-    // 1.65V²Î¿¼µçÑ¹¹ÊÕÏ¼ì²â£¨·¶Î§¼ì²â£©
+    // 1.65Vï¿½Î¿ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½Ï¼ï¿½â£¨ï¿½ï¿½Î§ï¿½ï¿½â£©
     if (sys_param.signal.v1p65_voltage > FAULT_TH_V1P65_HIGH ||
         sys_param.signal.v1p65_voltage < FAULT_TH_V1P65_LOW)
     {
@@ -887,12 +976,12 @@ static void fault_detection_task(void)
     }
     else
     {
-        v1p65_fault_count = 0; // ÇåÁã¼ÆÊýÆ÷
+        v1p65_fault_count = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
         if (sys_param.fault_delay > FAULT_DELAY_S)
             sys_param.fault.bit.v1p65_sample = 0;
     }
 
-    // ¸üÐÂ¹ÊÕÏ½á¹û
+    // ï¿½ï¿½ï¿½Â¹ï¿½ï¿½Ï½ï¿½ï¿?
     if (sys_param.fault.data > 0)
     {
         sys_param.fault_result = 1;
@@ -905,42 +994,42 @@ static void fault_detection_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void system_timer_management(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ÏµÍ³¶¨Ê±Æ÷¹ÜÀí
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ÏµÍ³ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void system_timer_management(void)
 {
     sys_param.timer.timer_1ms_count++;
 
-    // ============= 1ms¼¶¶¨Ê±ÈÎÎñ =============
+    // ============= 1msï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ =============
     if (sys_param.timer.timer_1ms_count >= TIMER_1MS_CYCLES) // 20 * 50us = 1ms
     {
-        sys_param.timer.timer_1ms_count = 0; // ÖØÖÃ1ms¼ÆÊýÆ÷
+        sys_param.timer.timer_1ms_count = 0; // ï¿½ï¿½ï¿½ï¿½1msï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
-        // sub1g¶¨Ê±Æ÷µÝÔö
-        if (sys_param.sub1g.sw_version[0] == '\0') // Î´ÊÕµ½°æ±¾£¬¼ÌÐø¼ÆÊ±
+        // sub1gï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        if (sys_param.sub1g.sw_version[0] == '\0') // Î´ï¿½Õµï¿½ï¿½æ±¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±
         {
             sys_param.sub1g.version_timer_ms++;
         }
         sys_param.sub1g.rssi_timer_ms++;
 
-        // ============= 20ms¼¶¶¨Ê±ÈÎÎñ =============
+        // ============= 20msï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ =============
         sys_param.timer.timer_20ms_count++;
         if (sys_param.timer.timer_20ms_count >= TIMER_20mS_CYCLES) // 1000ms = 1s
         {
             sys_param.timer.timer_20ms_count = 0;
 
-            // ÉèÖÃ20ms±êÖ¾
+            // ï¿½ï¿½ï¿½ï¿½20msï¿½ï¿½Ö¾
             sys_param.flags.timer_20ms_flag = 1;
         }
 
-        // ============= 1s¼¶¶¨Ê±ÈÎÎñ =============
+        // ============= 1sï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ =============
         sys_param.timer.timer_1s_count++;
         if (sys_param.timer.timer_1s_count >= TIMER_1S_CYCLES) // 1000ms = 1s
         {
             sys_param.timer.timer_1s_count = 0;
-            sys_param.fault_delay++; // ¹ÊÕÏÑÓÊ±¼ÆÊýÆ÷µÝÔö
+            sys_param.fault_delay++; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
             static uint8_t count = 0;
             count++;
@@ -950,7 +1039,7 @@ void system_timer_management(void)
                 sys_param.flags.timer_10s_flag = 1;
             }
 
-            // ÉèÖÃ1s±êÖ¾
+            // ï¿½ï¿½ï¿½ï¿½1sï¿½ï¿½Ö¾
             sys_param.flags.timer_1s_flag = 1;
         }
     }
@@ -958,13 +1047,13 @@ void system_timer_management(void)
 
 /*---------------------------------------------------------------------------
  Name        : void INT_ADC_1_1_ISR(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ADC²ÉÑùÖÐ¶Ï·þÎñ³ÌÐò£¬ÖÜÆÚÎª50us¡£
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ADCï¿½ï¿½ï¿½ï¿½ï¿½Ð¶Ï·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î?50usï¿½ï¿½
 ---------------------------------------------------------------------------*/
-void ADC1_Handler(void) // 50USÒ»´ÎÖÐ¶Ï
+void ADC1_Handler(void) // 50USÒ»ï¿½ï¿½ï¿½Ð¶ï¿½
 {
-    // ADC²ÉÑùºÍÐÅºÅ´¦Àí
+    // ADCï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÅºÅ´ï¿½ï¿½ï¿½
     if (ADC_GetStatus(CM_ADC1, ADC_FLAG_EOCA) == SET)
     {
         ADC_ClearStatus(CM_ADC1, ADC_FLAG_EOCA);
@@ -973,17 +1062,17 @@ void ADC1_Handler(void) // 50USÒ»´ÎÖÐ¶Ï
 
         adc_sample_and_process();
 
-        // Ìî³äµçÑ¹µçÁ÷Êý¾Ý»º´æÇø
+        // ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý»ï¿½ï¿½ï¿½ï¿½ï¿½
         voltage_and_current_buffer_record();
 
-        // ¹ýÁã¼ì²â£ºÊ¹ÓÃÎ´ÂË²¨µÄÔ­Ê¼µçÑ¹£¬±ÜÃâ LPF ÒýÈëÏàÎ»ÖÍºóµ¼ÖÂ¹ýÁãµã¼ÆÊýÆ«ÉÙ
-        // 2Ñù±¾Á¬ÐøÍ¬·ûºÅÅÐ¶Ï±¾ÉíÒÑÓÐ×ã¹»µÄ¿¹ÔëÄÜÁ¦£¬ÎÞÐè LPF
+        // ï¿½ï¿½ï¿½ï¿½ï¿½â£ºÊ¹ï¿½ï¿½Î´ï¿½Ë²ï¿½ï¿½ï¿½Ô­Ê¼ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ LPF ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½Íºï¿½ï¿½Â¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ«ï¿½ï¿½
+        // 2ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶Ï±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã¹»ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ LPF
         zero_cross_detect(&sys_param.grid.zero_cross, sys_param.signal.ac_voltage);
 
-        // ÏµÍ³¶¨Ê±Æ÷¹ÜÀí
+        // ÏµÍ³ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         system_timer_management();
 
-        // ÉèÖÃÈÎÎñ±êÖ¾Î»£¬ÈÃÖ÷Ñ­»·´¦Àí¸´ÔÓÒµÎñÂß¼­
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òµï¿½ï¿½ï¿½ß¼ï¿?
         set_task_flags_from_interrupt();
 
         // GPIO_ResetPins(GPIO_PORT_F, GPIO_PIN_02);
@@ -993,16 +1082,16 @@ void ADC1_Handler(void) // 50USÒ»´ÎÖÐ¶Ï
 
 /*---------------------------------------------------------------------------
  Name        : void SysTick_Handler(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : 1msÏµÍ³µÎ´ðÖÐ¶Ï´¦Àí
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : 1msÏµÍ³ï¿½Î´ï¿½ï¿½Ð¶Ï´ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void SysTick_Handler(void)
 {
-    // ÉèÖÃ1ms¶¨Ê±±êÖ¾
+    // ï¿½ï¿½ï¿½ï¿½1msï¿½ï¿½Ê±ï¿½ï¿½Ö¾
     sys_param.flags.timer_1ms_flag = 1;
 
-    // ÏàÐòÊ¶±ð100ms¼ÆÊ±
+    // ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½100msï¿½ï¿½Ê±
     static uint8_t phase_identify_counter = 0;
     if (sys_param.state == SYS_PHASE_IDENTIFY)
     {
@@ -1019,14 +1108,14 @@ void SysTick_Handler(void)
         phase_identify_timer_100ms = 0;
     }
 
-    // ¼ÌµçÆ÷´ò¿ª¶¨Ê±Æ÷µÝÔö
+    // ï¿½Ìµï¿½ï¿½ï¿½ï¿½ò¿ª¶ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (sys_param.grid.phase_id.relay_opening_pending)
     {
         sys_param.grid.phase_id.relay_open_timer_ms++;
     }
 
-    // ========== Î´Åä¶ÔÉè±¸¼ÆÊýÆ÷¸üÐÂ(1ms) ==========
-    // ±éÀúËùÓÐÓÐÐ§µÄÎ´Åä¶ÔÉè±¸£¬µÝÔöÆä¼ÆÊýÆ÷
+    // ========== Î´ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?(1ms) ==========
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð§ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     for (uint8_t i = 0; i < UNPAIRED_DEVICE_MAX_NUM; i++)
     {
         if (sys_param.inv_request_pair_list[i].is_valid)
@@ -1039,7 +1128,7 @@ void SysTick_Handler(void)
             sys_param.inv_request_pair_list[i].paired_unvalid_ms--;
             if (sys_param.inv_request_pair_list[i].paired_unvalid_ms == 0)
             {
-                // ´ÓÎ´Åä¶ÔÁÐ±íÖÐÉ¾³ý
+                // ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½Ð±ï¿½ï¿½ï¿½É¾ï¿½ï¿?
                 inv_request_pair_list_remove(sys_param.inv_request_pair_list[i].sub1g_addr);
             }
         }
@@ -1049,7 +1138,7 @@ void SysTick_Handler(void)
         }
     }
 
-    // ¹¦ÂÊ¹ã²¥ºÍÈÕÆÚ¼ÆÊýÆ÷¸üÐÂ
+    // ï¿½ï¿½ï¿½Ê¹ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½Ú¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     sys_param.date_broadcast_counter++;
 
 #ifdef DEBUG_ENABLE
@@ -1059,8 +1148,8 @@ void SysTick_Handler(void)
     sys_param.mmi.led_count++;
     sys_param.mmi.display_timer_ms++;
 
-    // Sub1G Í¨ÐÅ³¬Ê±¼ì²â
-    if (sys_param.sub1g.state == 4) // Ö»ÓÐÔÚÍ¨ÐÅÕý³£×´Ì¬²Å¼ì²â³¬Ê±
+    // Sub1G Í¨ï¿½Å³ï¿½Ê±ï¿½ï¿½ï¿?
+    if (sys_param.sub1g.state == 4) // Ö»ï¿½ï¿½ï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Å¼ï¿½â³¬Ê?
     {
         sys_param.sub1g.timeout_count++;
         if (sys_param.sub1g.timeout_count >= 15000)
@@ -1070,7 +1159,7 @@ void SysTick_Handler(void)
         }
     }
 
-    // ²»ÔÚÉý¼¶Ê±ºò
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
     sys_param.sub1g.reboot_count++;
     if (!g_ota_manager.disable_broadcast)
     {
@@ -1085,7 +1174,7 @@ void SysTick_Handler(void)
         sys_param.sub1g.reboot_count = 0;
     }
 
-    // FFT²É¼¯ÑÓ³Ù¿ØÖÆ£ºis_ffting=1ºóµÈ´ý2Ãë²Å¿ªÊ¼²É¼¯
+    // FFTï¿½É¼ï¿½ï¿½Ó³Ù¿ï¿½ï¿½Æ£ï¿½is_ffting=1ï¿½ï¿½È´ï¿?2ï¿½ï¿½Å¿ï¿½Ê¼ï¿½É¼ï¿?
     static uint16_t fft_delay_count = 0;
     if (sys_param.fft_identify.is_ffting == 1)
     {
@@ -1093,7 +1182,7 @@ void SysTick_Handler(void)
         {
             fft_delay_count++;
 
-            // FFTµÈ´ýÆÚ¼äÇ°1Ãë£ºÃ¿100msÖÃÒ»´ÎÖØ·¢±êÖ¾£¬ÓÉÖ÷Ñ­»·¸ºÔðÊµ¼Ê·¢ËÍ
+            // FFTï¿½È´ï¿½ï¿½Ú¼ï¿½Ç°1ï¿½ë£ºÃ¿100msï¿½ï¿½Ò»ï¿½ï¿½ï¿½Ø·ï¿½ï¿½ï¿½Ö¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½Ê·ï¿½ï¿½ï¿½
             if (fft_delay_count >= 100 && fft_delay_count <= 1000 &&
                 (fft_delay_count % 100 == 0))
             {
@@ -1108,7 +1197,7 @@ void SysTick_Handler(void)
     }
     else
     {
-        fft_delay_count = 0; // is_ffting=0Ê±ÖØÖÃ¼ÆÊý
+        fft_delay_count = 0; // is_ffting=0Ê±ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½
     }
 
     if (sys_param.fft_identify.boardcast_interval > 0)
@@ -1122,19 +1211,19 @@ void SysTick_Handler(void)
 
 /*---------------------------------------------------------------------------
  Name        : void system_param_init(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ÏµÍ³²ÎÊýÉÏµç³õÊ¼»¯º¯Êý£¬½«ËùÓÐ²ÎÊýÇåÁã
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ÏµÍ³ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
 ---------------------------------------------------------------------------*/
 void system_param_init(void)
 {
-    // Ò»´ÎÐÔÇåÁãÕû¸ö½á¹¹Ìå
+    // Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½
     memset(&sys_param, 0, sizeof(sys_param_t));
 
-    // ³õÊ¼»¯ÏµÍ³±êÖ¾Î»
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ÏµÍ³ï¿½ï¿½Ö¾Î»
     system_flags_init();
 
-    // ³õÊ¼»¯CTÊÇ·ñÔÚÏß¼ì²â
+    // ï¿½ï¿½Ê¼ï¿½ï¿½CTï¿½Ç·ï¿½ï¿½ï¿½ï¿½ß¼ï¿½ï¿?
     ct_online_detect_init(&sys_param.ct1);
     ct_online_detect_init(&sys_param.ct2);
     ct_online_detect_init(&sys_param.ct3);
@@ -1143,14 +1232,14 @@ void system_param_init(void)
     power_calc_init(&sys_param.ct2.power);
     power_calc_init(&sys_param.ct3.power);
 
-    grid_manager_init(); // ³õÊ¼»¯µçÍø¼ì²â²ÎÊý
+    grid_manager_init(); // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
-    // Ä¬ÈÏÏàÐòsequence_k=1£¨CT1=AÏà£¬CT2=BÏàÖÍºó120¡ã£¬CT3=CÏà³¬Ç°120¡ã£©
+    // Ä¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½sequence_k=1ï¿½ï¿½CT1=Aï¿½à£¬CT2=Bï¿½ï¿½ï¿½Íºï¿½120ï¿½ã£¬CT3=Cï¿½à³¬Ç°120ï¿½ã£©
     sys_param.grid.phase_id.sequence_k = 1;
     sys_param.grid.phase_id.identification_valid = 1;
     update_ct_to_phase_mapping(1);
 
-    // ¹¦ÂÊ·½Ïò¹Ì¶¨ÎªÕýÏò£¬ÎÞÐèÖ´ÐÐ·½Ïò¼ì²âÁ÷³Ì
+    // ï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½Ì¶ï¿½Îªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½Ð·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     sys_param.ct1.power.power_direction = 1;
     sys_param.ct1.power.direction_detect_complete = 1;
     sys_param.ct2.power.power_direction = 1;
@@ -1158,52 +1247,52 @@ void system_param_init(void)
     sys_param.ct3.power.power_direction = 1;
     sys_param.ct3.power.direction_detect_complete = 1;
 
-    ota_manager_init(); // ³õÊ¼»¯OTA¹ÜÀíÆ÷
+    ota_manager_init(); // ï¿½ï¿½Ê¼ï¿½ï¿½OTAï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
     for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++)
     {
-        // ³õÊ¼»¯Î¢ÄæÉè±¸ÐÅÏ¢Êý×é
+        // ï¿½ï¿½Ê¼ï¿½ï¿½Î¢ï¿½ï¿½ï¿½è±¸ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½ï¿½
         memset(sys_param.paired_inv_info[i].device_sn, 0, SN_LENGTH + 1);
         memset(sys_param.paired_inv_info[i].device_sn, 0, sizeof(sys_param.paired_inv_info[i].device_sn));
         sys_param.paired_inv_info[i].sub1g_addr = 0;
         sys_param.paired_inv_info[i].siid = 0;
 
-        // ³õÊ¼»¯Î´Åä¶ÔÉè±¸ÁÐ±í
+        // ï¿½ï¿½Ê¼ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½è±¸ï¿½Ð±ï¿?
         sys_param.inv_request_pair_list[i].is_valid = false;
         sys_param.inv_request_pair_list[i].sub1g_addr = 0;
         sys_param.inv_request_pair_list[i].unpaired_updata_ms = 0;
         sys_param.inv_request_pair_list[i].device_sn[0] = '\0';
         sys_param.inv_request_pair_list[i].product_model = 0;
 
-        // ³õÊ¼»¯ÓÃ»§Åä¶ÔÁÐ±í
+        // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½Ã»ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿?
         sys_param.user_pair_list[i].is_valid = false;
         sys_param.user_pair_list[i].device_sn[0] = '\0';
     }
 
-    sys_param.anti_backflow_switch = 1; // Ä¬ÈÏ¿ªÆô·ÀÄæÁ÷¹¦ÄÜ
+    sys_param.anti_backflow_switch = 1; // Ä¬ï¿½Ï¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
-    // Ä¬ÈÏÊÇµ¥Ïà·¢µç
+    // Ä¬ï¿½ï¿½ï¿½Çµï¿½ï¿½à·¢ï¿½ï¿½
     sys_param.is_three_phase = false;
 
-    // ³õÊ¼»¯ Sub1G ×´Ì¬ÎªÎ´Á¬½Ó
-    sys_param.sub1g.state = 1;         // 1 = Î´Åä¶ÔÉè±¸
-    sys_param.sub1g.timeout_count = 0; // ³¬Ê±¼ÆÊýÆ÷ÇåÁã
-    sys_param.sub1g.reboot_count = 0;  // Í¨ÐÅ³¬Ê±ÖØÆô¼ÆÊýÆ÷
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ Sub1G ×´Ì¬ÎªÎ´ï¿½ï¿½ï¿½ï¿½
+    sys_param.sub1g.state = 1;         // 1 = Î´ï¿½ï¿½ï¿½ï¿½è±?
+    sys_param.sub1g.timeout_count = 0; // ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    sys_param.sub1g.reboot_count = 0;  // Í¨ï¿½Å³ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
     sys_param.sub1g.version_timer_ms = 0;
     sys_param.sub1g.rssi_timer_ms = 0;
     sys_param.sub1g.rssi = 0;
     sys_param.sub1g.ct_sub1g_addr = 0;
-    sys_param.sub1g.sw_version[0] = '\0'; // °æ±¾×Ö·û´®³õÊ¼»¯Îª¿Õ
-    sys_param.sub1g.channel_index = 0xFF; // CTÐÅµÀÖµ³õÊ¼»¯
+    sys_param.sub1g.sw_version[0] = '\0'; // ï¿½æ±¾ï¿½Ö·ï¿½ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½Îªï¿½ï¿½
+    sys_param.sub1g.channel_index = 0xFF; // CTï¿½Åµï¿½Öµï¿½ï¿½Ê¼ï¿½ï¿½
 
-    // ³õÊ¼»¯slave°æ±¾¹ÜÀí
+    // ï¿½ï¿½Ê¼ï¿½ï¿½slaveï¿½æ±¾ï¿½ï¿½ï¿½ï¿½
     sys_param.slave_version.inv_sub1g_version[0] = '\0';
     sys_param.slave_version.inv_800w_version[0] = '\0';
     sys_param.slave_version.inv_2500w_version[0] = '\0';
     sys_param.slave_version.slave_version_reported = false;
 
-    // Î¢ÄæÏàÐòÊ¶±ð³õÊ¼»¯
+    // Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½Ê¼ï¿½ï¿?
     sys_param.fft_identify.identified_ct = 0;
     sys_param.fft_identify.is_ffting = 0;
     sys_param.fft_identify.enable_collect = 0;
@@ -1220,26 +1309,26 @@ void system_param_init(void)
 
 /*---------------------------------------------------------------------------
  Name        : void state_machine_partial_reset(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : CT¶Ï¿ªÊ±µÄ²¿·ÖÖØÖÃ£¬Ö»ÖØÖÃÔËÐÐÊ±²ÎÊý£¬±£ÁôEEPROM¼ÓÔØµÄÊý¾Ý
-               ±£Áô: paired_inv_info, electricity_consumption, power_work_mode,
-                     to_grid_power_limit, anti_backflow_switch, sub1gµØÖ·ºÍ°æ±¾,
-                     slave_version, user_pair_listµÈ
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : CTï¿½Ï¿ï¿½Ê±ï¿½Ä²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½Ö»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½EEPROMï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½ï¿½ï¿½
+               ï¿½ï¿½ï¿½ï¿½: paired_inv_info, electricity_consumption, power_work_mode,
+                     to_grid_power_limit, anti_backflow_switch, sub1gï¿½ï¿½Ö·ï¿½Í°æ±¾,
+                     slave_version, user_pair_listï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void state_machine_partial_reset(void)
 {
-    // ÖØÖÃCTÔÚÏß¼ì²â²ÎÊý
+    // ï¿½ï¿½ï¿½ï¿½CTï¿½ï¿½ï¿½ß¼ï¿½ï¿½ï¿½ï¿½ï¿½
     ct_online_detect_init(&sys_param.ct1);
     ct_online_detect_init(&sys_param.ct2);
     ct_online_detect_init(&sys_param.ct3);
 
-    // ÖØÖÃ¹¦ÂÊ¼ÆËã²ÎÊý
+    // ï¿½ï¿½ï¿½Ã¹ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     power_calc_init(&sys_param.ct1.power);
     power_calc_init(&sys_param.ct2.power);
     power_calc_init(&sys_param.ct3.power);
 
-    // ÖØÖÃ¹¦ÂÊ·½Ïò¼ì²â£¨±£³ÖÕýÏò£¬²»ÇåÁã£©
+    // ï¿½ï¿½ï¿½Ã¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½â£¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ò£¬²ï¿½ï¿½ï¿½ï¿½ã£©
     sys_param.ct1.power.power_direction = 1;
     sys_param.ct1.power.direction_detect_complete = 1;
     sys_param.ct1.power.direction_sample_count = 0;
@@ -1255,24 +1344,24 @@ void state_machine_partial_reset(void)
     sys_param.ct3.power.direction_sample_count = 0;
     sys_param.ct3.power.direction_power_sum = 0;
 
-    //  ÖØÖÃCT RMSÖµ
+    //  ï¿½ï¿½ï¿½ï¿½CT RMSÖµ
     sys_param.ct1.rms_value = 0;
     sys_param.ct2.rms_value = 0;
     sys_param.ct3.rms_value = 0;
 
-    // ÖØÖÃ¹ýÁã¼ì²â²ÎÊý£¨²¿·Ö£©
-    sys_param.grid.zero_cross.zero_cross_count = ZERO_CROSS_COUNT_TARGET / 2; // ±£Áô²¿·Ö¼ÆÊý£¬¼Ó¿ì»Ö¸´
+    // ï¿½ï¿½ï¿½Ã¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö£ï¿?
+    sys_param.grid.zero_cross.zero_cross_count = ZERO_CROSS_COUNT_TARGET / 2; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó¿ï¿½Ö¸ï¿?
     sys_param.grid.zero_cross.zero_cross_detected = 0;
     sys_param.grid.zero_cross.positive_zero_cross = 0;
 
-    // ÖØÖÃÏàÐòÊ¶±ðÔËÐÐÊ±²ÎÊý£¨±£ÁôÊ¶±ð½á¹û£©
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     memset(sys_param.grid.phase_id.matching_degree, 0, sizeof(sys_param.grid.phase_id.matching_degree));
     memset(sys_param.grid.phase_id.power_factor, 0, sizeof(sys_param.grid.phase_id.power_factor));
     memset(sys_param.grid.phase_id.identify_history, 0, sizeof(sys_param.grid.phase_id.identify_history));
     sys_param.grid.phase_id.identify_count = 0;
     sys_param.grid.phase_id.consistent_count = 0;
 
-    // ÖØÖÃFFTÊ¶±ð¹ÜÀíÆ÷
+    // ï¿½ï¿½ï¿½ï¿½FFTÊ¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     sys_param.fft_identify.identified_ct = 0;
     sys_param.fft_identify.is_ffting = 0;
     sys_param.fft_identify.enable_collect = 0;
@@ -1283,13 +1372,13 @@ void state_machine_partial_reset(void)
     sys_param.fft_identify.boardcast_interval = 0;
     sys_param.fft_identify.final_confirm_pending = false;
 
-    // ÖØÖÃÏµÍ³±êÖ¾Î»
+    // ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½ï¿½Ö¾Î»
     sys_param.flags.task.fault_check_ready = 0;
     sys_param.flags.rms_calc_ready = 0;
     sys_param.flags.task.power_calc_ready = 0;
     sys_param.flags.task.ct_phase_identify_ready = 0;
 
-    // ÖØÖÃ¹ÊÕÏ×´Ì¬
+    // ï¿½ï¿½ï¿½Ã¹ï¿½ï¿½ï¿½×´Ì¬
     sys_param.fault.data = 0;
     sys_param.fault_result = 0;
     sys_param.fault_delay = 0;
@@ -1297,10 +1386,10 @@ void state_machine_partial_reset(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
- Input       : ct_param - CT²ÎÊý½á¹¹ÌåÖ¸Õë
-               rms_value - µ±Ç°RMSÓÐÐ§Öµ
- Output      : ÎÞ
- Description : ´¦ÀíCTÔÚÏß¼ì²âÂß¼­
+ Input       : ct_param - CTï¿½ï¿½ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½Ö¸ï¿½ï¿½
+               rms_value - ï¿½ï¿½Ç°RMSï¿½ï¿½Ð§Öµ
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ï¿½ï¿½CTï¿½ï¿½ï¿½ß¼ï¿½ï¿½ï¿½ß¼ï¿?
 ---------------------------------------------------------------------------*/
 void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
 {
@@ -1309,33 +1398,33 @@ void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
 
     if (rms_value < CT_OFFLINE_THRESHOLD)
     {
-        // RMSÖµµÍÓÚÀëÏßãÐÖµ
+        // RMSÖµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµ
         ct_param->status.offline_count++;
-        ct_param->status.online_count = 0; // ÖØÖÃ¼ÆÊý
+        ct_param->status.online_count = 0; // ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½
 
-        // ¼ì²éÊÇ·ñ´ïµ½ÀëÏßÅÐ¶ÏÌõ¼þ
+        // ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ïµ½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½
         if (ct_param->status.offline_count >= CT_OFFLINE_COUNT_THRESHOLD)
         {
             ct_param->status.offline_count = CT_OFFLINE_COUNT_THRESHOLD;
             if (ct_param->status.connect_status != CT_STATUS_OFFLINE)
             {
-                ct_param->status.connect_status = CT_STATUS_OFFLINE; // ×´Ì¬¸Ä±ä£º´ÓÔÚÏß/Î´Öª -> ÀëÏß
+                ct_param->status.connect_status = CT_STATUS_OFFLINE; // ×´Ì¬ï¿½Ä±ä£ºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½/Î´Öª -> ï¿½ï¿½ï¿½ï¿½
             }
         }
     }
     else if (rms_value > CT_ONLINE_THRESHOLD)
     {
-        // RMSÖµ¸ßÓÚÔÚÏßãÐÖµ
+        // RMSÖµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµ
         ct_param->status.online_count++;
-        ct_param->status.offline_count = 0; // ÖØÖÃÀëÏß¼ÆÊý
+        ct_param->status.offline_count = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß¼ï¿½ï¿½ï¿½
 
-        // ¼ì²éÊÇ·ñ´ïµ½ÔÚÏßÅÐ¶ÏÌõ¼þ
+        // ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ïµ½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½
         if (ct_param->status.online_count >= CT_ONLINE_COUNT_THRESHOLD)
         {
             ct_param->status.online_count = CT_ONLINE_COUNT_THRESHOLD;
             if (ct_param->status.connect_status != CT_STATUS_ONLINE)
             {
-                ct_param->status.connect_status = CT_STATUS_ONLINE; // ×´Ì¬¸Ä±ä£º´ÓÀëÏß/Î´Öª -> ÔÚÏß
+                ct_param->status.connect_status = CT_STATUS_ONLINE; // ×´Ì¬ï¿½Ä±ä£ºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½/Î´Öª -> ï¿½ï¿½ï¿½ï¿½
             }
         }
     }
@@ -1350,52 +1439,52 @@ void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_power_direction_detect_process(ct_param_t *ct)
- Input       : ct - CT²ÎÊý½á¹¹ÌåÖ¸Õë
- Output      : ÎÞ
- Description : CT¹¦ÂÊ·½Ïò¼ì²â´¦Àíº¯Êý£¬ÊÕ¼¯50¸öpower.avg_powerÑù±¾ºóÅÐ¶Ï·½Ïò
+ Input       : ct - CTï¿½ï¿½ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½Ö¸ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : CTï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½â´¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¼ï¿½50ï¿½ï¿½power.avg_powerï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¶Ï·ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void ct_power_direction_detect_process(ct_param_t *ct)
 {
     if (ct == NULL)
         return;
 
-    // Èç¹ûÒÑ¾­¼ì²âÍê³É£¬Ö±½Ó·µ»Ø
+    // ï¿½ï¿½ï¿½ï¿½Ñ¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É£ï¿½Ö±ï¿½Ó·ï¿½ï¿½ï¿?
     if (ct->power.direction_detect_complete && ct->power.power_direction != 0)
     {
         return;
     }
     else if (ct->power.direction_detect_complete && ct->power.power_direction == 0)
     {
-        // ÖØÖÃ¼ì²âÏà¹Ø±äÁ¿
+        // ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½ï¿½Ø±ï¿½ï¿½ï¿½
         ct->power.direction_detect_complete = 0;
         ct->power.direction_power_sum = 0.0f;
         ct->power.direction_sample_count = 0;
     }
 
-    // Èç¹ûÓÐÐÂµÄ¹¦ÂÊÊý¾Ý¿ÉÓÃ
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÂµÄ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý¿ï¿½ï¿½ï¿?
     if (ct->power.power_ready)
     {
         ct->power.direction_power_sum += ct->power.avg_power;
         ct->power.direction_sample_count++;
 
-        // Èç¹ûÊÕ¼¯Âú250¸öÑù±¾£¨5s£©£¬¼ÆËãÆ½¾ùÖµ²¢ÅÐ¶Ï·½Ïò
+        // ï¿½ï¿½ï¿½ï¿½Õ¼ï¿½ï¿½ï¿?250ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½5sï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ½ï¿½ï¿½Öµï¿½ï¿½ï¿½Ð¶Ï·ï¿½ï¿½ï¿½
         if (ct->power.direction_sample_count >= 250)
         {
             float avg_power_50samples = ct->power.direction_power_sum / 250.0f;
 
             if (avg_power_50samples >= 0.0f)
             {
-                ct->power.power_direction = 1.0f; // Õý·½Ïò
+                ct->power.power_direction = 1.0f; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             }
             else
             {
-                ct->power.power_direction = -1.0f; // ¸º·½Ïò£¬ÐèÒªÈ¡·´
+                ct->power.power_direction = -1.0f; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÒªÈ¡ï¿½ï¿½
             }
 
-            // ±ê¼Ç¼ì²âÍê³É
+            // ï¿½ï¿½Ç¼ï¿½ï¿½ï¿½ï¿½ï¿?
             ct->power.direction_detect_complete = 1;
 
-            // ÖØÖÃ¼ÆÊýÆ÷ºÍÀÛ¼ÓºÍ£¬ÎªÏÂÒ»´Î¿ÉÄÜµÄÖØÐÂ¼ì²â×ö×¼±¸
+            // ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Û¼ÓºÍ£ï¿½Îªï¿½ï¿½Ò»ï¿½Î¿ï¿½ï¿½Üµï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½ï¿½ï¿½×¼ï¿½ï¿?
             ct->power.direction_power_sum = 0.0f;
             ct->power.direction_sample_count = 0;
         }
@@ -1404,9 +1493,9 @@ void ct_power_direction_detect_process(ct_param_t *ct)
 
 /*---------------------------------------------------------------------------
  Name        : void system_flags_init(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ³õÊ¼»¯ÏµÍ³±êÖ¾Î»¹ÜÀíÆ÷
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½Ê¼ï¿½ï¿½ÏµÍ³ï¿½ï¿½Ö¾Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void system_flags_init(void)
 {
@@ -1416,8 +1505,8 @@ void system_flags_init(void)
 /*---------------------------------------------------------------------------
  Name        : void ct_online_detect_init(ct_param_t *ct_param)
  Input       : ct_param
- Output      : ÎÞ
- Description : ³õÊ¼»¯CTÔÚÏß¼ì²â²ÎÊý
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½Ê¼ï¿½ï¿½CTï¿½ï¿½ï¿½ß¼ï¿½ï¿½ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void ct_online_detect_init(ct_param_t *ct_param)
 {
@@ -1434,8 +1523,8 @@ void ct_online_detect_init(ct_param_t *ct_param)
 /*---------------------------------------------------------------------------
  Name        : void power_calc_init(power_calc_t *calc_power)
  Input       : calc_power
- Output      : ÎÞ
- Description : ³õÊ¼»¯¹¦ÂÊ¼ÆËã²ÎÊý
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
 ---------------------------------------------------------------------------*/
 void power_calc_init(power_calc_t *calc_power)
 {
@@ -1452,24 +1541,24 @@ void power_calc_init(power_calc_t *calc_power)
 
 /*---------------------------------------------------------------------------
  Name        : grid_manager_init(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ³õÊ¼»¯µçÍø¼ì²â²ÎÊý
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 void grid_manager_init(void)
 {
     sys_param.state = SYS_INIT;
 
-    // ³õÊ¼»¯¹ýÁã²ÎÊý
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     sys_param.grid.zero_cross.positive_zero_cross = 0;
     sys_param.grid.zero_cross.frequency_valid = 0;
 
-    // ×ÔÊÊÓ¦ÆµÂÊÄ¬ÈÏÖµ£¨50Hz»ù×¼£¬ÕýÏò¹ýÁãºó»á¸üÐÂ£©
+    // ï¿½ï¿½ï¿½ï¿½Ó¦Æµï¿½ï¿½Ä¬ï¿½ï¿½Öµï¿½ï¿½50Hzï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â£ï¿½
     sys_param.grid.samples_per_cycle = 400;     // 50Hz: 20ms/50us
     sys_param.grid.phase_b_delay_samples = 133; // 400/3
     sys_param.grid.phase_c_delay_samples = 267; // 400*2/3
 
-    // ³õÊ¼»¯ÏàÐòÊ¶±ð²ÎÊý
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿?
     phase_identify_init(&sys_param.grid.phase_id);
 }
 
@@ -1478,8 +1567,8 @@ void ct_power_direction_detect_init(ct_param_t *ct)
     if (ct == NULL)
         return;
 
-    ct->power.power_direction = 0;           // ÖØÖÃ¹¦ÂÊ·½Ïò
-    ct->power.direction_detect_complete = 0; // ÖØÖÃ¼ì²âÍê³É±êÖ¾
+    ct->power.power_direction = 0;           // ï¿½ï¿½ï¿½Ã¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½
+    ct->power.direction_detect_complete = 0; // ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½ï¿½É±ï¿½Ö¾
 }
 
 void delay_us(uint16_t us)
@@ -1504,38 +1593,38 @@ void delay_ms(uint16_t ms)
 
 /*---------------------------------------------------------------------------
  Name        : void broadcast_three_phase_power(float *power_array)
- Input       : phase_count - ÏàÊý(3=ÈýÏà)
-               power_array - ¹¦ÂÊÊý×é
+ Input       : phase_count - ï¿½ï¿½ï¿½ï¿½(3=ï¿½ï¿½ï¿½ï¿½)
+               power_array - ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
  Output      : No
- Description : ¹¦ÂÊ¹ã²¥ÈÎÎñµ×²ãº¯Êý
-               - ¹ã²¥¹¦ÂÊ¸øËùÓÐÎ¢ÄæÉè±¸£¨µØÖ·0x0000£©
-               - ÂÖÁ÷Ö¸¶¨ÄÄ¸öÎ¢ÄæÉÏ±¨Êý¾Ý
-               - Ã¿¸öÎ¢ÄæÁ¬ÐøSWITCH_INV_BOARCAST´Î£¬È»ºóÂÖ»»µ½ÏÂÒ»¸ö
-               - ¼´Ê¹Î¢Äæ²»ÔÚÏßÒ²»á¹ã²¥£¨´øÉÏÆäµØÖ·ÒÔ½ÓÊÕÉÏ±¨£©
+ Description : ï¿½ï¿½ï¿½Ê¹ã²¥ï¿½ï¿½ï¿½ï¿½×²ãº¯ï¿½ï¿?
+               - ï¿½ã²¥ï¿½ï¿½ï¿½Ê¸ï¿½ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½Ö·0x0000ï¿½ï¿½
+               - ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½Ä¸ï¿½Î¢ï¿½ï¿½ï¿½Ï±ï¿½ï¿½ï¿½ï¿½ï¿½
+               - Ã¿ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½SWITCH_INV_BOARCASTï¿½Î£ï¿½È»ï¿½ï¿½ï¿½Ö»ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½
+               - ï¿½ï¿½Ê¹Î¢ï¿½æ²»ï¿½ï¿½ï¿½ï¿½Ò²ï¿½ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½Ô½ï¿½ï¿½ï¿½ï¿½Ï±ï¿½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 static void broadcast_three_phase_power(float *power_array)
 {
-    if (g_ota_manager.disable_broadcast) // OTAÆÚ¼ä½ûÖ¹¹ã²¥
+    if (g_ota_manager.disable_broadcast) // OTAï¿½Ú¼ï¿½ï¿½Ö¹ï¿½ã²?
     {
         return;
     }
 
-    static uint8_t current_slot = 0;    // µ±Ç°²ÛÎ»£¨0-7£©
-    static uint8_t broadcast_count = 0; // ÒÑ¹ã²¥´ÎÊý
+    static uint8_t current_slot = 0;    // ï¿½ï¿½Ç°ï¿½ï¿½Î»ï¿½ï¿½0-7ï¿½ï¿½
+    static uint8_t broadcast_count = 0; // ï¿½Ñ¹ã²¥ï¿½ï¿½ï¿½ï¿½
 
-    // ¼ÆËãÏÞ¹¦ÂÊÆ«ÒÆÖµ
+    // ï¿½ï¿½ï¿½ï¿½ï¿½Þ¹ï¿½ï¿½ï¿½Æ«ï¿½ï¿½Öµ
     int16_t ct_to_grid_power[3] = {0};
     if (sys_param.power_work_mode == 2)
     {
         if (sys_param.is_three_phase)
         {
-            // ÈýÏà£ºÆ½¾ù·ÖÅä
+            // ï¿½ï¿½ï¿½à£ºÆ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             int16_t avg_power = sys_param.to_grid_power_limit / 3;
             ct_to_grid_power[0] = ct_to_grid_power[1] = ct_to_grid_power[2] = avg_power;
         }
         else
         {
-            // µ¥Ïà£º¸ù¾Ýsequence_kÈ·¶¨ÏàÎ»£¬È«¼ÓÔÚÄÄÒ»Ïà
+            // ï¿½ï¿½ï¿½à£ºï¿½ï¿½ï¿½ï¿½sequence_kÈ·ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½È«ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½
             int phase = (sys_param.grid.phase_id.sequence_k - 1) / 2;
             if (phase >= 0 && phase < 3)
             {
@@ -1544,7 +1633,7 @@ static void broadcast_three_phase_power(float *power_array)
         }
     }
 
-    // ²éÕÒÓÐÐ§²ÛÎ»
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð§ï¿½ï¿½Î»
     uint8_t attempts = 0;
     while (!sys_param.paired_inv_info[current_slot].is_valid && attempts < INV_DEVICE_MAX_NUM)
     {
@@ -1552,23 +1641,23 @@ static void broadcast_three_phase_power(float *power_array)
         attempts++;
     }
 
-    // Èç¹ûËùÓÐ²ÛÎ»¶¼ÎÞÐ§,Ê¹ÓÃµØÖ·0(¹ã²¥µØÖ·)
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð²ï¿½Î»ï¿½ï¿½ï¿½ï¿½Ð?,Ê¹ï¿½Ãµï¿½Ö·0(ï¿½ã²¥ï¿½ï¿½Ö·)
     uint32_t target_addr = (attempts < INV_DEVICE_MAX_NUM) ? sys_param.paired_inv_info[current_slot].sub1g_addr : 0;
 
-    // ¼ÆËãÕæÕý¹ã²¥µÄ¹¦ÂÊÖµ£¨¼ÓÉÏÏÞ¹¦ÂÊÆ«ÒÆ£©
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã²¥ï¿½Ä¹ï¿½ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Þ¹ï¿½ï¿½ï¿½Æ«ï¿½Æ£ï¿½
     int16_t broadcast_power_ct1 = (int16_t)(power_array[0] + ct_to_grid_power[0]);
     int16_t broadcast_power_ct2 = (int16_t)(power_array[1] + ct_to_grid_power[1]);
     int16_t broadcast_power_ct3 = (int16_t)(power_array[2] + ct_to_grid_power[2]);
 
-    // ¸üÐÂ¹ã²¥Æ½¾ù¹¦ÂÊ
+    // ï¿½ï¿½ï¿½Â¹ã²¥Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     sys_param.ct1.power.ct_sub1g_boardcast_power_avg = (float)broadcast_power_ct1;
     sys_param.ct2.power.ct_sub1g_boardcast_power_avg = (float)broadcast_power_ct2;
     sys_param.ct3.power.ct_sub1g_boardcast_power_avg = (float)broadcast_power_ct3;
 
-    // ¹ã²¥ÈýÏà¹¦ÂÊ
+    // ï¿½ã²¥ï¿½ï¿½ï¿½à¹¦ï¿½ï¿½
     sub1g_send_broadcast_three_phase_power(broadcast_power_ct1, broadcast_power_ct2, broadcast_power_ct3, target_addr);
 
-    // ¹ã²¥¼ÆÊý£¬N´ÎºóÇÐ»»²ÛÎ»
+    // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Nï¿½Îºï¿½ï¿½Ð»ï¿½ï¿½ï¿½Î»
     broadcast_count++;
     if (broadcast_count >= SWITCH_INV_BOARCAST)
     {
@@ -1579,22 +1668,22 @@ static void broadcast_three_phase_power(float *power_array)
 
 /*---------------------------------------------------------------------------
  Name        : calculate_ct_boardcast_power_avg
- Description : ÈýÏàÄ£Ê½CT¹¦ÂÊÀÛ¼Ó(²»¶ÀÁ¢¼ÆÊý)
- Input       : ct_index - CTË÷Òý(0/1/2)
-               direction_complete - ·½Ïò¼ì²âÍê³É±êÖ¾
-               avg_power - Æ½¾ù¹¦ÂÊ
-               broadcast_power_avg - ¹ã²¥Æ½¾ù¹¦ÂÊ(Êä³ö)
+ Description : ï¿½ï¿½ï¿½ï¿½Ä£Ê½CTï¿½ï¿½ï¿½ï¿½ï¿½Û¼ï¿½(ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½)
+ Input       : ct_index - CTï¿½ï¿½ï¿½ï¿½(0/1/2)
+               direction_complete - ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É±ï¿½Ö?
+               avg_power - Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               broadcast_power_avg - ï¿½ã²¥Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(ï¿½ï¿½ï¿?)
 ---------------------------------------------------------------------------*/
 static void calculate_ct_boardcast_power_avg(uint8_t ct_index, bool direction_complete, float avg_power)
 {
     if (!direction_complete)
     {
-        // ·½Ïò¼ì²âÎ´Íê³É,ÇåÁãÀÛ¼ÓÆ÷
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î´ï¿½ï¿½ï¿?,ï¿½ï¿½ï¿½ï¿½ï¿½Û¼ï¿½ï¿½ï¿½
         ct_power_accum[ct_index] = 0;
         return;
     }
 
-    // ÀÛ¼Ó¹¦ÂÊ
+    // ï¿½Û¼Ó¹ï¿½ï¿½ï¿½
     ct_power_accum[ct_index] += avg_power;
 }
 
@@ -1602,15 +1691,15 @@ static void calculate_ct_boardcast_power_avg(uint8_t ct_index, bool direction_co
  Name        : void boardcast_power_task(void)
  Input       : No
  Output      : No
- Description : ¹¦ÂÊ¹ã²¥ÈÎÎñ£¬Ã¿µçÍøÖÜÆÚµ÷ÓÃÒ»´Î£¨ÓÉ power_cycle_ready ´¥·¢£©
-               - ÔÚSYS_NORMAL_RUN×´Ì¬£ºÀÛ¼Ó2¸öµçÍøÖÜÆÚ¹¦ÂÊºó¹ã²¥£¨50Hz=40ms£¬60Hz=33ms£©
-               - ÔÚSYS_POWER_DIR_DETECTÇÒrelay_opening_pending×´Ì¬£ºÂÖÑ¯´ò¿ª¼ÌµçÆ÷
-               - ÔÚÆäËû×´Ì¬£ºÂÖÑ¯¹Ø±Õ¼ÌµçÆ÷
-               - ËùÓÐ×´Ì¬¶¼»áÂÖ»»²ÛÎ»ÒÔ½ÓÊÕÎ¢ÄæÉÏ±¨
+ Description : ï¿½ï¿½ï¿½Ê¹ã²¥ï¿½ï¿½ï¿½ï¿½Ã¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Úµï¿½ï¿½ï¿½Ò»ï¿½Î£ï¿½ï¿½ï¿½ power_cycle_ready ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               - ï¿½ï¿½SYS_NORMAL_RUN×´Ì¬ï¿½ï¿½ï¿½Û¼ï¿½2ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¹ï¿½ï¿½Êºï¿½ã²¥ï¿½ï¿?50Hz=40msï¿½ï¿½60Hz=33msï¿½ï¿½
+               - ï¿½ï¿½SYS_POWER_DIR_DETECTï¿½ï¿½relay_opening_pending×´Ì¬ï¿½ï¿½ï¿½ï¿½Ñ¯ï¿½ò¿ª¼Ìµï¿½ï¿½ï¿½
+               - ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ï¿½ï¿½Ñ¯ï¿½Ø±Õ¼Ìµï¿½ï¿½ï¿½
+               - ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½Ö»ï¿½ï¿½ï¿½Î»ï¿½Ô½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½Ï±ï¿½
 ---------------------------------------------------------------------------*/
 void boardcast_power_task(void)
 {
-    // ¼ì²éÔËÐÐÌõ¼þ£ºÃ¿¸öµçÍøÖÜÆÚ¹¦ÂÊ¼ÆËãÍê³Éºó´¥·¢
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¹ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½Éºó´¥·ï¿½
     if (!sys_param.flags.task.power_cycle_ready)
         return;
 
@@ -1618,12 +1707,12 @@ void boardcast_power_task(void)
 
     float power_array[3] = {0.0f, 0.0f, 0.0f};
 
-    // ÅÐ¶Ïµ±Ç°ÊÇ·ñÔÚÕý³£ÔËÐÐ×´Ì¬
+    // ï¿½Ð¶Ïµï¿½Ç°ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
     if (sys_param.state == SYS_NORMAL_RUN)
     {
-        // ========== Õý³£ÔËÐÐÄ£Ê½:¹ã²¥Êµ¼ÊÈýÏà¹¦ÂÊ ==========
+        // ========== ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½:ï¿½ã²¥Êµï¿½ï¿½ï¿½ï¿½ï¿½à¹¦ï¿½ï¿½ ==========
 
-        // ÀÛ¼Ó¹¦ÂÊ
+        // ï¿½Û¼Ó¹ï¿½ï¿½ï¿½
         calculate_ct_boardcast_power_avg(0, sys_param.ct1.power.direction_detect_complete, sys_param.ct1.power.fix_dir_power);
         calculate_ct_boardcast_power_avg(1, sys_param.ct2.power.direction_detect_complete, sys_param.ct2.power.fix_dir_power);
         calculate_ct_boardcast_power_avg(2, sys_param.ct3.power.direction_detect_complete, sys_param.ct3.power.fix_dir_power);
@@ -1638,12 +1727,12 @@ void boardcast_power_task(void)
 
             if (all_direction_complete)
             {
-                // ¼ÆËãÆ½¾ù¹¦ÂÊ
+                // ï¿½ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
                 power_array[0] = ct_power_accum[0] / three_phase_broadcast_count;
                 power_array[1] = ct_power_accum[1] / three_phase_broadcast_count;
                 power_array[2] = ct_power_accum[2] / three_phase_broadcast_count;
 
-                // µ¥ÏàÏµÍ³ÖÐ£¬²»ÔÚÏßµÄCT¹¦ÂÊÉèÖÃÎª0
+                // ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ßµï¿½CTï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îª0
                 if (!sys_param.is_three_phase)
                 {
                     if (sys_param.ct1.status.connect_status != CT_STATUS_ONLINE)
@@ -1655,10 +1744,10 @@ void boardcast_power_task(void)
                 }
             }
 
-            // ¹ã²¥¹¦ÂÊ
+            // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½
             broadcast_three_phase_power(power_array);
 
-            // ÖØÖÃ¼ÆÊýÆ÷ºÍÀÛ¼ÓÆ÷
+            // ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Û¼ï¿½ï¿½ï¿½
             three_phase_broadcast_count = 0;
             ct_power_accum[0] = 0;
             ct_power_accum[1] = 0;
@@ -1667,29 +1756,29 @@ void boardcast_power_task(void)
     }
     else
     {
-        // ·ÇÕý³£ÔËÐÐ×´Ì¬£¬¹ã²¥0¹¦ÂÊ
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ï¿½ã²¥0ï¿½ï¿½ï¿½ï¿½
         sys_param.ct1.power.ct_sub1g_boardcast_power_avg = 0.0f;
         sys_param.ct2.power.ct_sub1g_boardcast_power_avg = 0.0f;
         sys_param.ct3.power.ct_sub1g_boardcast_power_avg = 0.0f;
 
-        // ÅÐ¶ÏÊÇ·ñÐèÒª´ò¿ª¼ÌµçÆ÷(¹¦ÂÊ·½Ïò¼ì²âÍê³Éºó2ÃëÄÚ)
+        // ï¿½Ð¶ï¿½ï¿½Ç·ï¿½ï¿½ï¿½Òªï¿½ò¿ª¼Ìµï¿½ï¿½ï¿½(ï¿½ï¿½ï¿½Ê·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Éºï¿?2ï¿½ï¿½ï¿½ï¿½)
         static uint8_t relay_slot = 0;
-        static uint8_t broadcast_toggle = 0; // ½»Ìæ0=¹ã²¥¹¦ÂÊ, 1=¹ã²¥¼ÌµçÆ÷¿ª¹Ø
+        static uint8_t broadcast_toggle = 0; // ï¿½ï¿½ï¿½ï¿½0=ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½, 1=ï¿½ã²¥ï¿½Ìµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         bool should_open = (sys_param.state == SYS_POWER_DIR_DETECT && sys_param.grid.phase_id.relay_opening_pending);
         should_open = true;
         if (broadcast_toggle == 0)
         {
-            // ¹ã²¥0¹¦ÂÊ
+            // ï¿½ã²¥0ï¿½ï¿½ï¿½ï¿½
             power_array[0] = 0.0f;
             power_array[1] = 0.0f;
             power_array[2] = 0.0f;
             broadcast_three_phase_power(power_array);
 
-            broadcast_toggle = 1; // ÏÂ´Î¹ã²¥¼ÌµçÆ÷¿ª¹Ø
+            broadcast_toggle = 1; // ï¿½Â´Î¹ã²¥ï¿½Ìµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         }
         else
         {
-            // ¹ã²¥¼ÌµçÆ÷¿ª¹Ø
+            // ï¿½ã²¥ï¿½Ìµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             uint8_t attempts = 0;
             while (!sys_param.paired_inv_info[relay_slot].is_valid && attempts < INV_DEVICE_MAX_NUM)
             {
@@ -1707,25 +1796,25 @@ void boardcast_power_task(void)
             }
 
             relay_slot = (relay_slot + 1) % INV_DEVICE_MAX_NUM;
-            broadcast_toggle = 0; // ÏÂ´Î¹ã²¥¹¦ÂÊ
+            broadcast_toggle = 0; // ï¿½Â´Î¹ã²¥ï¿½ï¿½ï¿½ï¿½
         }
     }
 }
 
 /*---------------------------------------------------------------------------
  Name        : void broadcast_other_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : ¹ã²¥FFTÊÇ·ñÐèÒª²ÉÑùÓë·ÖÎö£¬²¢Ã¿10Ãëµ÷ÓÃÒ»´ÎÈÕÆÚ¹ã²¥ÈÎÎñ
-               - ¹ã²¥ÈÕÆÚ¸øËùÓÐÎ¢ÄæÉè±¸£¨µØÖ·0x0000£©
-               - Ã¿30s¹ã²¥ÈýÏàÔÚÏß·¢µçµÄÎ¢Äæ¸öÊý£¨½öÈýÏàÄ£Ê½£©
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ã²¥FFTï¿½Ç·ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã?10ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½Ú¹ã²¥ï¿½ï¿½ï¿½ï¿?
+               - ï¿½ã²¥ï¿½ï¿½ï¿½Ú¸ï¿½ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½Ö·0x0000ï¿½ï¿½
+               - Ã¿30sï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß·ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½ï¿½ï¿½
 ---------------------------------------------------------------------------*/
 static void broadcast_other_task(void)
 {
-    // ¼ì²éFFTÏà¹Ø²Ù×÷µÄÇ°ÖÃÌõ¼þ
+    // ï¿½ï¿½ï¿½FFTï¿½ï¿½Ø²ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     bool fft_conditions_met = (sys_param.state == SYS_NORMAL_RUN) && (sys_param.grid.phase_id.sequence_k > 0);
 
-    // µÚÒ»ÓÅÏÈ¼¶£º¼ì²éÊÇ·ñÍê³É4´ÎÊ¶±ð£¬ÐèÒª·¢ËÍ×îÖÕÈ·ÈÏ
+    // ï¿½ï¿½Ò»ï¿½ï¿½ï¿½È¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½4ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È·ï¿½ï¿½
     if (sys_param.fft_identify.final_confirm_pending &&
         sys_param.fft_identify.boardcast_interval == 0 &&
         fft_conditions_met)
@@ -1733,13 +1822,13 @@ static void broadcast_other_task(void)
         sys_param.fft_identify.final_confirm_pending = false;
 
 #ifdef FFT_DEBUG_PRINT
-        printf("·¢ËÍ×îÖÕÏàÎ»ÐÅÏ¢¸øÎ¢Äæ: CT%d\r\n", sys_param.fft_identify.identified_ct);
+        printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½Ï¢ï¿½ï¿½Î¢ï¿½ï¿½: CT%d\r\n", sys_param.fft_identify.identified_ct);
 #endif
 
-        // ·¢ËÍÏàÎ»ÐÅÏ¢¸øÎ¢Äæ
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½Ï¢ï¿½ï¿½Î¢ï¿½ï¿½
         sub1g_send_set_inv_phase(sys_param.fft_identify.sub1g_addr, sys_param.fft_identify.identified_ct);
 
-        // ±£´æµ½EEPROM
+        // ï¿½ï¿½ï¿½æµ½EEPROM
         uint8_t idx = find_inv_index_by_sub1g_addr(sys_param.fft_identify.sub1g_addr);
         if (idx < INV_DEVICE_MAX_NUM)
         {
@@ -1748,15 +1837,15 @@ static void broadcast_other_task(void)
             eeprom_update_device_phase(sys_param.fft_identify.sub1g_addr, sys_param.fft_identify.identified_ct);
         }
 
-        // Ê¶±ðÍêÈ«½áÊø£¬ÇåÀíËùÓÐ×´Ì¬
+        // Ê¶ï¿½ï¿½ï¿½ï¿½È«ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
         sys_param.fft_identify.sub1g_addr = 0;
         sys_param.fft_identify.consecutive_success_count = 0;
         sys_param.fft_identify.last_identified_ct = 0;
 
-        return; // ±¾´ÎÈÎÎñÍê³É£¬Ö±½Ó·µ»Ø
+        return; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É£ï¿½Ö±ï¿½Ó·ï¿½ï¿½ï¿?
     }
 
-    // µÚ¶þÓÅÏÈ¼¶£º·¢ËÍÏàÐòÊ¶±ðÃüÁî
+    // ï¿½Ú¶ï¿½ï¿½ï¿½ï¿½È¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (sys_param.fft_identify.resend_cmd &&
         sys_param.fft_identify.boardcast_interval == 0 &&
         fft_conditions_met)
@@ -1765,24 +1854,24 @@ static void broadcast_other_task(void)
 
         uint16_t power = sys_param.fft_identify.power;
 
-        // ·¢ËÍ¿ªÆôÏàÐòÊ¶±ðÃüÁî
+        // ï¿½ï¿½ï¿½Í¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         sub1g_send_enable_phase_identify(sys_param.fft_identify.sub1g_addr, 25, power, sys_param.fft_identify.interval_time);
 
-        // ·¢ËÍÃüÁîºó£¬Æô¶¯±¾ÂÖÊ¶±ð
-        sys_param.fft_identify.is_ffting = 1; // ¿ªÊ¼ÐÂÒ»ÂÖÊ¶±ð
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿?
+        sys_param.fft_identify.is_ffting = 1; // ï¿½ï¿½Ê¼ï¿½ï¿½Ò»ï¿½ï¿½Ê¶ï¿½ï¿½
 
 #ifdef FFT_DEBUG_PRINT
-        printf("·¢ËÍÏàÐòÊ¶±ðÃüÁî: addr=0x%08X, power=%dW, interval=%d\r\n",
+        printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: addr=0x%08X, power=%dW, interval=%d\r\n",
                sys_param.fft_identify.sub1g_addr,
                power,
                sys_param.fft_identify.interval_time);
-        printf("µÈ´ý2Ãëºó¿ªÊ¼²É¼¯...\r\n");
+        printf("ï¿½È´ï¿½2ï¿½ï¿½ï¿½Ê¼ï¿½É¼ï¿?...\r\n");
 #endif
 
-        return; // ·¢ËÍÍêÃüÁîºó·µ»Ø
+        return; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ó·µ»ï¿?
     }
 
-    // µÚÈýÓÅÏÈ¼¶£ºµÈ´ý2ÃëÆÚ¼äµÄÖØ·¢²¹³¥
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¼ï¿½ï¿½ï¿½ï¿½È´ï¿½2ï¿½ï¿½ï¿½Ú¼ï¿½ï¿½ï¿½Ø·ï¿½ï¿½ï¿½ï¿½ï¿?
     if (sys_param.fft_identify.retry_flag && fft_conditions_met)
     {
         sys_param.fft_identify.retry_flag = 0;
@@ -1791,26 +1880,26 @@ static void broadcast_other_task(void)
         sub1g_send_enable_phase_identify(sys_param.fft_identify.sub1g_addr, 25, power, sys_param.fft_identify.interval_time);
 
 #ifdef FFT_DEBUG_PRINT
-        printf("ÖØ·¢ÏàÐòÊ¶±ðÃüÁî: addr=0x%08X, power=%dW\r\n", sys_param.fft_identify.sub1g_addr, power);
+        printf("ï¿½Ø·ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: addr=0x%08X, power=%dW\r\n", sys_param.fft_identify.sub1g_addr, power);
 #endif
         return;
     }
 
-    // µÚËÄÓÅÏÈ¼¶£ºÈÕÆÚ¹ã²¥ÈÎÎñ
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¹ã²¥ï¿½ï¿½ï¿½ï¿½
     if (sys_param.date_broadcast_counter >= 20000)
     {
         sys_param.date_broadcast_counter = 0;
 
-        // ¼ì²éÈÕÆÚ×Ö·û´®ÊÇ·ñÓÐÐ§
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½Ð?
         if (strlen(sys_param.time.date) < 10)
         {
-            return; // ÈÕÆÚ¸ñÊ½´íÎó£¬²»¹ã²¥
+            return; // ï¿½ï¿½ï¿½Ú¸ï¿½Ê½ï¿½ï¿½ï¿½ó£¬²ï¿½ï¿½ã²¥
         }
 
-        // ¹ã²¥ÈÕÆÚ
+        // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½
         sub1g_send_broadcast_date(sys_param.time.date);
 
-        // 40sÒ»´Î¹ã²¥ÈýÏàÔÚÏß·¢µçµÄÎ¢Äæ¸öÊý
+        // 40sÒ»ï¿½Î¹ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ß·ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½
         if (sys_param.is_three_phase)
         {
             static uint8_t timer_40s_cnt = 0;
@@ -1827,10 +1916,10 @@ static void broadcast_other_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void clear_offline_inverter_data(uint8_t inv_idx)
- Input       : inv_idx - Î¢ÄæË÷Òý
- Output      : ÎÞ
- Description : Çå³ýÀëÏßÎ¢ÄæµÄÉÏ±¨Êý¾Ý»º´æ£¬±ÜÃâWiFi¶ÁÈ¡µ½¾ÉÖµ
-               ±£ÁôÉè±¸Éí·ÝÐÅÏ¢¡¢ÅäÖÃ²ÎÊýºÍÀÛ¼Æ·¢µçÁ¿£¬Çå¿Õ°æ±¾ºÅ£¬Ê¹Éè±¸ÖØÐÂÉÏÏßÊ±´¥·¢°æ±¾ÉÏ±¨
+ Input       : inv_idx - Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½Ï±ï¿½ï¿½ï¿½ï¿½Ý»ï¿½ï¿½æ£¬ï¿½ï¿½ï¿½ï¿½WiFiï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½Öµ
+               ï¿½ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½ï¿½ï¿½Ã²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Û¼Æ·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ°æ±¾ï¿½Å£ï¿½Ê¹ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½æ±¾ï¿½Ï±ï¿?
 ---------------------------------------------------------------------------*/
 static void clear_offline_inverter_data(uint8_t inv_idx)
 {
@@ -1839,11 +1928,11 @@ static void clear_offline_inverter_data(uint8_t inv_idx)
 
     inv_device_t *inv = &sys_param.paired_inv_info[inv_idx];
 
-    // Çå³ý¹¤×÷×´Ì¬ºÍ¹¦ÂÊÊý¾Ý
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Í¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     inv->work_state = 0;
     inv->grid_power = 0.0f;
 
-    // Çå³ýPVÊý¾Ý
+    // ï¿½ï¿½ï¿½PVï¿½ï¿½ï¿½ï¿½
     for (uint8_t pv_idx = 0; pv_idx < 4; pv_idx++)
     {
         inv->pv[pv_idx].state = 0;
@@ -1852,7 +1941,7 @@ static void clear_offline_inverter_data(uint8_t inv_idx)
         inv->pv[pv_idx].current = 0.0f;
     }
 
-    // Çå¿Õ°æ±¾ºÅ£¬Ê¹Éè±¸ÖØÐÂÉÏÏßÊ±´¥·¢°æ±¾ÉÏ±¨
+    // ï¿½ï¿½Õ°æ±¾ï¿½Å£ï¿½Ê¹ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½æ±¾ï¿½Ï±ï¿?
     inv->sw_version[0] = '\0';
     inv->sub1g_version[0] = '\0';
 
@@ -1861,73 +1950,73 @@ static void clear_offline_inverter_data(uint8_t inv_idx)
 
 static void cal_phase_inv_1s(void)
 {
-    // 36Ãë¼ÆÊýºÍ¹¦ÂÊÀÛ¼Ó¾²Ì¬±äÁ¿
+    // 36ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¹ï¿½ï¿½ï¿½ï¿½Û¼Ó¾ï¿½Ì¬ï¿½ï¿½ï¿½ï¿?
     static uint8_t power_calc_cnt = 0;
     static float ct1_power_sum = 0.0f;
     static float ct2_power_sum = 0.0f;
     static float ct3_power_sum = 0.0f;
     static uint8_t save_eep_intrval = 0;
 
-    uint8_t ct1_inv_count = 0;  // CT1Ïà·¢µç¼ÆÊýÆ÷
-    uint8_t ct2_inv_count = 0;  // CT2Ïà·¢µç¼ÆÊýÆ÷
-    uint8_t ct3_inv_count = 0;  // CT3Ïà·¢µç¼ÆÊýÆ÷
-    float ct1_inv_power = 0.0f; // CT1Ïà¹¦ÂÊ
-    float ct2_inv_power = 0.0f; // CT2Ïà¹¦ÂÊ
-    float ct3_inv_power = 0.0f; // CT3Ïà¹¦ÂÊ
+    uint8_t ct1_inv_count = 0;  // CT1ï¿½à·¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
+    uint8_t ct2_inv_count = 0;  // CT2ï¿½à·¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
+    uint8_t ct3_inv_count = 0;  // CT3ï¿½à·¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
+    float ct1_inv_power = 0.0f; // CT1ï¿½à¹¦ï¿½ï¿½
+    float ct2_inv_power = 0.0f; // CT2ï¿½à¹¦ï¿½ï¿½
+    float ct3_inv_power = 0.0f; // CT3ï¿½à¹¦ï¿½ï¿½
 
     for (uint8_t i = 0; i < UNPAIRED_DEVICE_MAX_NUM; i++)
     {
         if (sys_param.paired_inv_info[i].is_valid && sys_param.paired_inv_info[i].online_state == 2)
         {
-            // OTAÆÚ¼ä²»ÅÐ¶ÏÔÚÏßÉè±¸
+            // OTAï¿½Ú¼ä²»ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½è±¸
             if (!g_ota_manager.disable_broadcast)
             {
                 sys_param.paired_inv_info[i].offline_updata_ms++;
             }
 
-            // ÒÑÓÐÅä¶ÔÉè±¸¼ÆÊýÆ÷¸üÐÂ£¬³¬Ê±1·ÖÖÓÎ´ÉÏ±¨Êý¾Ý£¬¼Ç×÷ÀëÏß
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â£ï¿½ï¿½ï¿½Ê?1ï¿½ï¿½ï¿½ï¿½Î´ï¿½Ï±ï¿½ï¿½ï¿½ï¿½Ý£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             if (sys_param.paired_inv_info[i].offline_updata_ms >= PAIRED_INV_ONLINE_TIMEOUT_S)
             {
                 sys_param.paired_inv_info[i].offline_updata_ms = PAIRED_INV_ONLINE_TIMEOUT_S;
                 if (sys_param.paired_inv_info[i].online_state == 2)
                 {
-                    sys_param.paired_inv_info[i].online_state = 1; // Åä¶ÔÉè±¸ÀëÏß
+                    sys_param.paired_inv_info[i].online_state = 1; // ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿?
 
-                    clear_offline_inverter_data(i); // Çå³ýÀëÏßÉè±¸µÄÊý¾Ý»º´æ
+                    clear_offline_inverter_data(i); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½Ý»ï¿½ï¿½ï¿?
 
-                    // ±ê¼ÇÊôÐÔÒÑ±ä»¯£¬Ä¿µÄÊÇÎªÁËÉÏ±¨¸øwifi
+                    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ±ä»¯ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½Îªï¿½ï¿½ï¿½Ï±ï¿½ï¿½ï¿½wifi
                     sys_param.paired_inv_info[i].prop_changed = true;
                 }
             }
             else
             {
-                // Í³¼ÆÕýÔÚ·¢µçµÄÎ¢Äæ¸öÊý£¨ÔÚÏßÇÒ¹¦ÂÊ´óÓÚ1W£©
+                // Í³ï¿½ï¿½ï¿½ï¿½ï¿½Ú·ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò¹ï¿½ï¿½Ê´ï¿½ï¿½ï¿½1Wï¿½ï¿½
                 if (sys_param.paired_inv_info[i].grid_power > 1)
                 {
                     if (sys_param.is_three_phase)
                     {
-                        // ÈýÏàÏµÍ³£º¸ù¾ÝÏàÎ»(CT¼¸)·Ö±ðÍ³¼Æ
+                        // ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»(CTï¿½ï¿½)ï¿½Ö±ï¿½Í³ï¿½ï¿½
                         switch (sys_param.paired_inv_info[i].phase)
                         {
-                        case 1: // CT1Ïà
+                        case 1: // CT1ï¿½ï¿½
                             ct1_inv_count++;
                             ct1_inv_power += sys_param.paired_inv_info[i].grid_power;
                             break;
-                        case 2: // CT2Ïà
+                        case 2: // CT2ï¿½ï¿½
                             ct2_inv_count++;
                             ct2_inv_power += sys_param.paired_inv_info[i].grid_power;
                             break;
-                        case 3: // CT3Ïà
+                        case 3: // CT3ï¿½ï¿½
                             ct3_inv_count++;
                             ct3_inv_power += sys_param.paired_inv_info[i].grid_power;
                             break;
-                        default: // phase == 0 (Î´Ê¶±ð)£¬ÔÝ²»¼ÆÈë
+                        default: // phase == 0 (Î´Ê¶ï¿½ï¿½)ï¿½ï¿½ï¿½Ý²ï¿½ï¿½ï¿½ï¿½ï¿½
                             break;
                         }
                     }
                     else
                     {
-                        // µ¥ÏàÏµÍ³£ºËùÓÐ·¢µçÉè±¸¶¼¼ÆÈëAÏà
+                        // ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½ï¿½ï¿½ï¿½ï¿½Ð·ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Aï¿½ï¿½
                         ct1_inv_count++;
                         ct1_inv_power += sys_param.paired_inv_info[i].grid_power;
                     }
@@ -1936,16 +2025,16 @@ static void cal_phase_inv_1s(void)
         }
         else if (sys_param.paired_inv_info[i].is_valid == 0)
         {
-            sys_param.paired_inv_info[i].online_state = 0; // Ã»ÓÐÅä¶ÔµÄINVÉè±¸
+            sys_param.paired_inv_info[i].online_state = 0; // Ã»ï¿½ï¿½ï¿½ï¿½Ôµï¿½INVï¿½è±¸
         }
 
-        // ¼ì²é²¢É¾³ý³¬Ê±µÄÎ´Åä¶ÔÉè±¸(³¬¹ý10ÃëÎ´ÊÕµ½¹ã²¥)
+        // ï¿½ï¿½é²¢É¾ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½è±¸(ï¿½ï¿½ï¿½ï¿½10ï¿½ï¿½Î´ï¿½Õµï¿½ï¿½ã²¥)
         if (sys_param.inv_request_pair_list[i].is_valid)
         {
-            // ¼ì²éÊÇ·ñ³¬Ê±(10Ãë = 10000ms)
+            // ï¿½ï¿½ï¿½ï¿½Ç·ï¿½Ê?(10ï¿½ï¿½ = 10000ms)
             if (sys_param.inv_request_pair_list[i].unpaired_updata_ms >= UNPAIRED_DEVICE_TIMEOUT_MS)
             {
-                // Çå³ýÉè±¸
+                // ï¿½ï¿½ï¿½ï¿½è±?
                 sys_param.inv_request_pair_list[i].is_valid = false;
                 sys_param.inv_request_pair_list[i].sub1g_addr = 0;
                 sys_param.inv_request_pair_list[i].unpaired_updata_ms = 0;
@@ -1954,31 +2043,31 @@ static void cal_phase_inv_1s(void)
         }
     }
 
-    // ¸üÐÂ¸÷ÏàÕýÔÚ·¢µçµÄÎ¢Äæ¸öÊý¡¢¹¦ÂÊ
+    // ï¿½ï¿½ï¿½Â¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú·ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     sys_param.ct1.inv_device_cnt = ct1_inv_count;
     sys_param.ct2.inv_device_cnt = ct2_inv_count;
     sys_param.ct3.inv_device_cnt = ct3_inv_count;
 
-    // CT1¡¢CT2¡¢CT3Î¢Äæ·¢µç¹¦ÂÊ
+    // CT1ï¿½ï¿½CT2ï¿½ï¿½CT3Î¢ï¿½æ·¢ï¿½ç¹¦ï¿½ï¿½
     sys_param.ct1.inv_power = ct1_inv_power;
     sys_param.ct2.inv_power = ct2_inv_power;
     sys_param.ct3.inv_power = ct3_inv_power;
 
-    // CT1¡¢CT2¡¢CT3Ïà¸ºÔØ¹¦ÂÊ
+    // CT1ï¿½ï¿½CT2ï¿½ï¿½CT3ï¿½à¸ºï¿½Ø¹ï¿½ï¿½ï¿½
     sys_param.ct1.use_power = ct1_inv_power + sys_param.ct1.power.fix_dir_power;
     sys_param.ct2.use_power = ct2_inv_power + sys_param.ct2.power.fix_dir_power;
     sys_param.ct3.use_power = ct3_inv_power + sys_param.ct3.power.fix_dir_power;
 
-    // ÀÛ¼ÓÃ¿Ãë¹¦ÂÊÖµ
+    // ï¿½Û¼ï¿½Ã¿ï¿½ë¹¦ï¿½ï¿½Öµ
     ct1_power_sum += sys_param.ct1.power.fix_dir_power;
     ct2_power_sum += sys_param.ct2.power.fix_dir_power;
     ct3_power_sum += sys_param.ct3.power.fix_dir_power;
     power_calc_cnt++;
 
-    // Ã¿36Ãë¼ÆËãÒ»´Î·¢µçÁ¿
+    // Ã¿36ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Î·ï¿½ï¿½ï¿½ï¿½ï¿?
     if (power_calc_cnt >= 36)
     {
-        // 36ÃëµÄ·¢µçÁ¿(Wh) = (¹¦ÂÊÀÛ¼ÓÖµ / 36) ¡Á (36/3600)
+        // 36ï¿½ï¿½Ä·ï¿½ï¿½ï¿½ï¿½ï¿?(Wh) = (ï¿½ï¿½ï¿½ï¿½ï¿½Û¼ï¿½Öµ / 36) ï¿½ï¿½ (36/3600)
         sys_param.ct1.power_consumption = ct1_power_sum / 3600.0f;
         sys_param.ct2.power_consumption = ct2_power_sum / 3600.0f;
         sys_param.ct3.power_consumption = ct3_power_sum / 3600.0f;
@@ -1986,7 +2075,7 @@ static void cal_phase_inv_1s(void)
         sys_param.hmi.electricity_consumption = (uint32_t)(sys_param.hmi.electricity_consumption + sys_param.ct1.power_consumption + sys_param.ct2.power_consumption + sys_param.ct3.power_consumption);
 
         save_eep_intrval++;
-        if (save_eep_intrval >= 10) // 360Ãë = 6·ÖÖÓ
+        if (save_eep_intrval >= 10) // 360ï¿½ï¿½ = 6ï¿½ï¿½ï¿½ï¿½
         {
             save_eep_intrval = 0;
 
@@ -2006,49 +2095,49 @@ static void cal_phase_inv_1s(void)
             }
         }
 
-        // ÖØÖÃ¼ÆÊýÆ÷ºÍÀÛ¼ÓÖµ
+        // ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Û¼ï¿½Öµ
         power_calc_cnt = 0;
         ct1_power_sum = 0;
         ct2_power_sum = 0;
         ct3_power_sum = 0;
     }
 
-    // ¸ù¾Ý¹¤×÷Ä£Ê½¸üÐÂÏÞÁ÷×´Ì¬¸üÐÂ
+    // ï¿½ï¿½ï¿½Ý¹ï¿½ï¿½ï¿½Ä£Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½ï¿½ï¿½
     float total_grid_power = sys_param.ct1.power.fix_dir_power + sys_param.ct2.power.fix_dir_power + sys_param.ct3.power.fix_dir_power;
 
     switch (sys_param.power_work_mode)
     {
-    case 1:                                 // ·ÀÄæÁ÷·¢µçÄ£Ê½
-        sys_param.anti_backflow_switch = 1; // ¿ªÆô·ÀÄæÁ÷
-        if (total_grid_power < (-30))       // 3ÏàÕâÀïÓÃ-30W
+    case 1:                                 // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½
+        sys_param.anti_backflow_switch = 1; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        if (total_grid_power < (-30))       // 3ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½-30W
         {
-            sys_param.limit_state = 2; // ÏÞÁ÷Ê§°Ü
+            sys_param.limit_state = 2; // ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½
         }
         else
         {
-            sys_param.limit_state = 1; // ±£»¤ÖÐ
+            sys_param.limit_state = 1; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         }
         break;
 
-    case 2:                                 // ÏÞ¹¦ÂÊ·¢µçÄ£Ê½
-        sys_param.anti_backflow_switch = 1; // ¿ªÆô·ÀÄæÁ÷
+    case 2:                                 // ï¿½Þ¹ï¿½ï¿½Ê·ï¿½ï¿½ï¿½Ä£Ê½
+        sys_param.anti_backflow_switch = 1; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (total_grid_power < -(sys_param.to_grid_power_limit))
         {
-            sys_param.limit_state = 2; // ÏÞÁ÷Ê§°Ü
+            sys_param.limit_state = 2; // ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½
         }
         else if (total_grid_power < -(sys_param.to_grid_power_limit) * 0.8f)
         {
-            sys_param.limit_state = 1; // ÏÞÁ÷ÖÐ
+            sys_param.limit_state = 1; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         }
         else
         {
-            sys_param.limit_state = 0; // Õý³£·¢µç
+            sys_param.limit_state = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         }
         break;
 
-    case 3:                                 // ×ÔÓÉ·¢µçÄ£Ê½
-        sys_param.anti_backflow_switch = 0; // ¹Ø±Õ·ÀÄæÁ÷
-        sys_param.limit_state = 0;          // ×ÔÓÉ·¢µçÖÐ
+    case 3:                                 // ï¿½ï¿½ï¿½É·ï¿½ï¿½ï¿½Ä£Ê½
+        sys_param.anti_backflow_switch = 0; // ï¿½Ø±Õ·ï¿½ï¿½ï¿½ï¿½ï¿½
+        sys_param.limit_state = 0;          // ï¿½ï¿½ï¿½É·ï¿½ï¿½ï¿½ï¿½ï¿½
         break;
 
     default:
@@ -2060,13 +2149,13 @@ static void cal_phase_inv_1s(void)
 
 /*---------------------------------------------------------------------------
  Name        : inv_comm_stats_1s_task
-  Input       : ÎÞ
- Output      : ÎÞ
+  Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
  Description :
 ---------------------------------------------------------------------------*/
 static void inv_comm_stats_1s_task(void)
 {
-    // Ãë¼ÆÊýµÝÔö
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿?
     uint8_t bound_inv_count = 0;
     for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++)
     {
@@ -2076,15 +2165,15 @@ static void inv_comm_stats_1s_task(void)
         }
     }
 
-    // Ã¿120Ãë£¨2·ÖÖÓ£©¼ÆËãÒ»´Î¶ª°üÂÊºÍÆ½¾ùRSSI
+    // Ã¿120ï¿½ë£¨2ï¿½ï¿½ï¿½Ó£ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Î¶ï¿½ï¿½ï¿½ï¿½Êºï¿½Æ½ï¿½ï¿½RSSI
     if (bound_inv_count == 0)
     {
         return;
     }
 
-    // 60ÃëÍ³¼Æ´°¿ÚÄÚÆÚÍû°üÊý: 60000ms / 40ms = 1500°ü
-    // NÌ¨Î¢ÄæÊ±Ã¿Ì¨ÆÚÍû°üÊý 1500/N °ü
-    // 10%ÈÝ²î: ÊµÊÕ°üÊý >= ÆÚÍû°üÊý * 90% ÔòÈÏÎª100%ÔÚÏß
+    // 60ï¿½ï¿½Í³ï¿½Æ´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: 60000ms / 40ms = 1500ï¿½ï¿½
+    // NÌ¨Î¢ï¿½ï¿½Ê±Ã¿Ì¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 1500/N ï¿½ï¿½
+    // 10%ï¿½Ý²ï¿½: Êµï¿½Õ°ï¿½ï¿½ï¿½ >= ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ * 90% ï¿½ï¿½ï¿½ï¿½Îª100%ï¿½ï¿½ï¿½ï¿½
     uint16_t expected_packets_per_inv = 1500 / bound_inv_count;
     uint16_t expected_with_tolerance = expected_packets_per_inv * 90 / 100;
 
@@ -2099,13 +2188,13 @@ static void inv_comm_stats_1s_task(void)
 
         inv->stats_time_sec++;
 
-        // ¼ÆËã60ÃëÄÚµÄÍ³¼Æ
+        // ï¿½ï¿½ï¿½ï¿½60ï¿½ï¿½ï¿½Úµï¿½Í³ï¿½ï¿½
         if (inv->stats_time_sec >= 60)
         {
             uint16_t total_rx = inv->rx_0x50_count + inv->rx_0x52_count + inv->rx_0x54_count +
                                 inv->rx_0x55_count + inv->rx_0x56_count + inv->rx_0x57_count;
 
-            // ¼ÆËã¶ª°üÊýÁ¿
+            // ï¿½ï¿½ï¿½ã¶ªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
             if (total_rx >= expected_with_tolerance)
             {
                 inv->plr = 0;
@@ -2124,7 +2213,7 @@ static void inv_comm_stats_1s_task(void)
                          inv->rx_0x54_count, inv->rx_0x55_count, inv->rx_0x56_count, inv->rx_0x57_count,
                          total_rx, expected_packets_per_inv, inv->plr);
 
-            // ¼ÆËã¸÷×Ô¶ª°üÂÊ
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿?
             inv->stats_time_sec = 0;
             inv->rx_0x50_count = 0;
             inv->rx_0x52_count = 0;
@@ -2138,8 +2227,8 @@ static void inv_comm_stats_1s_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void param_update_1s_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
  Description :
 ---------------------------------------------------------------------------*/
 static void param_update_1s_task(void)
@@ -2148,16 +2237,16 @@ static void param_update_1s_task(void)
     {
         sys_param.flags.timer_1s_flag = 0;
 
-        // Î¢ÄæÍ¨ÐÅÍ³¼ÆÈÎÎñ
+        // Î¢ï¿½ï¿½Í¨ï¿½ï¿½Í³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         inv_comm_stats_1s_task();
 
-        // ¸üÐÂ¸÷ÏàÕýÔÚ·¢µçµÄÎ¢Äæ¸öÊý¡¢¹¦ÂÊ¡¢·¢µçÁ¿
+        // ï¿½ï¿½ï¿½Â¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú·ï¿½ï¿½ï¿½ï¿½Î¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         cal_phase_inv_1s();
 
-        // ¸üÐÂhmi…¢”µ
+        // ï¿½ï¿½ï¿½ï¿½hmiï¿½ï¿½ï¿½ï¿½
         hmi_update_all_params();
 
-        // ÏÈ¼ì²éÆµÂÊÊÇ·ñÓÐ¹ÊÕÏ
+        // ï¿½È¼ï¿½ï¿½Æµï¿½ï¿½ï¿½Ç·ï¿½ï¿½Ð¹ï¿½ï¿½ï¿?
         if (sys_param.fault.bit.grid_frequency)
         {
             DEBUG_PRINTF("[State Machine] Grid frequency fault detected, SYS_FREQ_FAULT.\r\n");
@@ -2168,16 +2257,16 @@ static void param_update_1s_task(void)
         // if (printf_intreval >= 4)
         // {
         //     printf_intreval = 0;
-        //     // ´òÓ¡CTÓÐÐ§ÖµÒÔ¼°ÔÚÏß×´Ì¬
-        //     printf("CT1_Rms:%f ÔÚÏß:%d ¹¦ÂÊ:%.2f, CT2_Rms:%f ÔÚÏß:%d ¹¦ÂÊ:%.2f, CT3_Rms:%f ÔÚÏß:%d ¹¦ÂÊ:%.2f¡£ ÈýÏàÏµÍ³:%d\r\n", sys_param.ct1.rms_value, sys_param.ct1.status.connect_status, sys_param.ct1.power.fix_dir_power, sys_param.ct2.rms_value, sys_param.ct2.status.connect_status, sys_param.ct2.power.fix_dir_power, sys_param.ct3.rms_value, sys_param.ct3.status.connect_status, sys_param.ct3.power.fix_dir_power, sys_param.is_three_phase);
+        //     // ï¿½ï¿½Ó¡CTï¿½ï¿½Ð§Öµï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬
+        //     printf("CT1_Rms:%f ï¿½ï¿½ï¿½ï¿½:%d ï¿½ï¿½ï¿½ï¿½:%.2f, CT2_Rms:%f ï¿½ï¿½ï¿½ï¿½:%d ï¿½ï¿½ï¿½ï¿½:%.2f, CT3_Rms:%f ï¿½ï¿½ï¿½ï¿½:%d ï¿½ï¿½ï¿½ï¿½:%.2fï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ÏµÍ³:%d\r\n", sys_param.ct1.rms_value, sys_param.ct1.status.connect_status, sys_param.ct1.power.fix_dir_power, sys_param.ct2.rms_value, sys_param.ct2.status.connect_status, sys_param.ct2.power.fix_dir_power, sys_param.ct3.rms_value, sys_param.ct3.status.connect_status, sys_param.ct3.power.fix_dir_power, sys_param.is_three_phase);
         // }
-        // ´òÓ¡ÈýÏà¹ã²¥¹¦ÂÊÒÔ¼°ÊÇ·ñÊÇÈýÏàÄ£Ê½
-        // DEBUG_PRINTF("¹ã²¥¹¦ÂÊ:%.2f, %.2f, %.2f, ÈýÏàÏµÍ³:%d, to_grid=%d\r\n", sys_param.ct1.power.ct_sub1g_boardcast_power_avg, sys_param.ct2.power.ct_sub1g_boardcast_power_avg, sys_param.ct3.power.ct_sub1g_boardcast_power_avg, sys_param.is_three_phase, sys_param.to_grid_power_limit);
+        // ï¿½ï¿½Ó¡ï¿½ï¿½ï¿½ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê?
+        // DEBUG_PRINTF("ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½:%.2f, %.2f, %.2f, ï¿½ï¿½ï¿½ï¿½ÏµÍ³:%d, to_grid=%d\r\n", sys_param.ct1.power.ct_sub1g_boardcast_power_avg, sys_param.ct2.power.ct_sub1g_boardcast_power_avg, sys_param.ct3.power.ct_sub1g_boardcast_power_avg, sys_param.is_three_phase, sys_param.to_grid_power_limit);
 
 #ifdef FFT_DEBUG_PRINT
         if (sys_param.fft_identify.enable_collect == 1)
         {
-            printf("ÕýÔÚFFT²É¼¯:\r\n");
+            printf("ï¿½ï¿½ï¿½ï¿½FFTï¿½É¼ï¿½:\r\n");
         }
 #endif
     }
@@ -2185,15 +2274,15 @@ static void param_update_1s_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void sub1g_timer_task(void)
- Input       : ÎÞ
- Output      : ÎÞ
- Description : SUB1G¶¨Ê±Æ÷ÈÎÎñ
-               - ÉÏµç3ÃëºóÃ¿3Ãë·¢ËÍ0x41»ñÈ¡°æ±¾ÐÅÏ¢
-               - Ã¿2Ãë·¢ËÍ0x42»ñÈ¡RSSI
+ Input       : ï¿½ï¿½
+ Output      : ï¿½ï¿½
+ Description : SUB1Gï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+               - ï¿½Ïµï¿½3ï¿½ï¿½ï¿½Ã?3ï¿½ë·¢ï¿½ï¿½0x41ï¿½ï¿½È¡ï¿½æ±¾ï¿½ï¿½Ï¢
+               - Ã¿2ï¿½ë·¢ï¿½ï¿½0x42ï¿½ï¿½È¡RSSI
 ---------------------------------------------------------------------------*/
 static void sub1g_timer_task(void)
 {
-    // Ã¿3Ãë·¢ËÍ0x41»ñÈ¡°æ±¾ÐÅÏ¢£¬Ö±µ½ÊÕµ½°æ±¾»Ø¸´
+    // Ã¿3ï¿½ë·¢ï¿½ï¿½0x41ï¿½ï¿½È¡ï¿½æ±¾ï¿½ï¿½Ï¢ï¿½ï¿½Ö±ï¿½ï¿½ï¿½Õµï¿½ï¿½æ±¾ï¿½Ø¸ï¿½
     if (sys_param.sub1g.sw_version[0] == '\0')
     {
         if (sys_param.sub1g.version_timer_ms >= 3000)
@@ -2203,7 +2292,7 @@ static void sub1g_timer_task(void)
         }
     }
 
-    // Ã¿10Ãë·¢ËÍ0x42»ñÈ¡RSSI
+    // Ã¿10ï¿½ë·¢ï¿½ï¿½0x42ï¿½ï¿½È¡RSSI
     if (sys_param.sub1g.rssi_timer_ms >= 10000)
     {
         sub1g_send_get_rssi();
