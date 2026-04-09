@@ -26,7 +26,7 @@
 #define DEBUG_4G_ENABLE
 
 #ifdef DEBUG_4G_ENABLE
-#define DEBUG_4G_PRINTF(fmt, ...) printf("[4G] " fmt, ##__VA_ARGS__)
+#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R] " fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_4G_PRINTF(fmt, ...) ((void)0)
 #endif
