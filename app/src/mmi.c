@@ -326,6 +326,11 @@ static bool parse_ota_start_data(uint8_t *data, uint16_t data_len)
 void mmi_task(void)
 {
     static uint32_t led_count = 0;
+    static uint32_t mmi_call = 0;
+    mmi_call++;
+    if (mmi_call <= 3) {
+        DEBUG_PRINTF("[MMI] call #%lu, led_count=%lu\r\n", mmi_call, (unsigned long)sys_param.mmi.led_count);
+    }
     if (led_count != sys_param.mmi.led_count)
     {
         led_count = sys_param.mmi.led_count;

@@ -32,6 +32,10 @@ int ml307r_init(void)
     s_ml_state = ML307R_STATE_INIT;
     DEBUG_4G_PRINTF(" >>> ml307r_init start\r\n");
 
+    // ML307R 启动需要时间，先等待一下
+    DEBUG_4G_PRINTF(" >>> Waiting for ML307R to be ready...\r\n");
+    delay_ms(2000);  // 等待2秒让ML307R完全启动
+
     // 1. AT 通信测试
     DEBUG_4G_PRINTF(" >>> AT send: AT\r\n");
     ret = at_send_command("AT", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));

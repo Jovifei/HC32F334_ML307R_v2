@@ -5,9 +5,12 @@
 #include <stdio.h>
 #include <string.h>
 
+// SysTick 计数器（由 hc32_ll_utility.c 提供，不依赖 ADC 中断）
+extern uint32_t SysTick_GetTick(void);
+
 #define UART_AT_RX_BUF_SIZE 256
 
-// ==================== 静态变�?? ====================
+// ==================== 静态变量 ====================
 
 static uint8_t s_rx_buf[256];
 static volatile uint16_t s_rx_head =
@@ -72,33 +75,28 @@ static void handle_parsed_line(const char *line)
     }
 }
 
-// USART2 中断服务程序（ML307R 4G模组�?
+// USART2 中断服务程序（ML307R 4G模组）
 void USART2_Handler(void)
 {
-    // RX 中断（每个字节到达时触发�?
-    if (USART_GetStatus(CM_USART2, USART_FLAG_RX_FULL) == SET)
+    if (USART_GetStatus(CM_USART2, USART_FLAG_RX_FULL))
     {
         uint16_t data = USART_ReadData(CM_USART2);
         uint8_t ch = (uint8_t)(data & 0xFF);
-        USART_ClearStatus(CM_USART2, USART_FLAG_RX_FULL);
         uint16_t next = (s_rx_head + 1) % UART_AT_RX_BUF_SIZE;
         if (next != s_rx_tail)
         {
             s_rx_buf[s_rx_head] = ch;
             s_rx_head = next;
         }
-        // �����ֽڣ�֪ͨǰ̨����������ISR�������
         s_rx_data_ready = true;
-        (void)USART_GetStatus(CM_USART2, USART_FLAG_RX_FULL);
     }
 
-    // RX timeout
-    // 中断（一帧数据接收完毕，RX线空�?10bits时触发）
-    if (USART_GetStatus(CM_USART2, USART_FLAG_RX_TIMEOUT) == SET)
+    if (USART_GetStatus(CM_USART2, USART_FLAG_RX_TIMEOUT))
     {
-        USART_ClearStatus(CM_USART2, USART_FLAG_RX_TIMEOUT);
-        s_rx_data_ready = true;  // 只设置标志，不在中断里解�?
+        s_rx_data_ready = true;  // 通知前台有数据待处理
     }
+
+    USART_ClearStatus(CM_USART2, USART_FLAG_ALL);
 }
 
 // Ԥ��ʽ������ÿ��������� max_bytes ���ֽڣ�������ѭ��һ�γԿյ��¿���
@@ -144,7 +142,10 @@ void uart_at_init(void)
     s_line_len = 0;
     memset(s_urc_tbl, 0, sizeof(s_urc_tbl));
 
-    // 使能 USART2 RX 中断和超时中断（�? NVIC 中已配置优先级）
+    // 使能 USART2 RX 中断和超时中断
+    NVIC_ClearPendingIRQ(USART2_IRQn);
+    NVIC_SetPriority(USART2_IRQn, DDL_IRQ_PRIO_13);
+    NVIC_EnableIRQ(USART2_IRQn);
     USART_FuncCmd(CM_USART2, USART_INT_RX, ENABLE);
     USART_FuncCmd(CM_USART2, USART_RX_TIMEOUT, ENABLE);
     USART_FuncCmd(CM_USART2, USART_INT_RX_TIMEOUT, ENABLE);
@@ -170,21 +171,30 @@ int at_send_command(const char *cmd, const char *expected_ok,
             ;
         USART_WriteData(CM_USART2, (uint16_t)cmd_buf[i]);
     }
+    // 等待 TX 完全发送完成
+    while (USART_GetStatus(CM_USART2, USART_FLAG_TX_CPLT) == RESET)
+        ;
+    // TX发送完成后在主循环打印调试信息（不在中断上下文）
+    DEBUG_4G_PRINTF(" UART_AT: TX %d bytes complete\r\n", len);
 
-    // 等待响应（轮询方式）
+    // 等待响应（改进的非阻塞轮询）
     s_cmd_result = 0;
-    uint32_t start = sys_param.timer.timer_1ms_count;
+    uint32_t start = SysTick_GetTick();
 
     while (s_cmd_result == 0)
     {
+        // 处理 RX 数据
         if (s_rx_data_ready || (s_rx_head != s_rx_tail))
         {
             s_rx_data_ready = false;
             parse_rx_lines_budget(64);
         }
-        if ((uint32_t)(sys_param.timer.timer_1ms_count - start) >= timeout_ms)
+
+        // 超时检查（使用 SysTick 计数器，不依赖 ADC 中断）
+        if ((SysTick_GetTick() - start) >= timeout_ms)
         {
             s_cmd_result = -1; // 超时
+            break;
         }
     }
 
@@ -247,6 +257,31 @@ void uart_at_process(void)
 {
     if (s_rx_data_ready || (s_rx_head != s_rx_tail))
     {
+        // 打印收到的原始数据（不消费缓冲区，只快照）
+        uint16_t snap_tail = s_rx_tail;
+        uint16_t count = 0;
+        char dump[128];
+        while (snap_tail != s_rx_head && count < sizeof(dump) - 1)
+        {
+            uint8_t ch = s_rx_buf[snap_tail];
+            snap_tail = (snap_tail + 1) % UART_AT_RX_BUF_SIZE;
+            if (ch >= 0x20 && ch < 0x7F)
+                dump[count++] = (char)ch;
+            else if (ch == '\r' || ch == '\n')
+            {
+                if (count > 0 && count < sizeof(dump) - 1)
+                    dump[count++] = '\n';
+            }
+            else
+                count += snprintf(dump + count, sizeof(dump) - count, "[0x%02X]", ch);
+        }
+        if (count > 0)
+        {
+            dump[count] = '\0';
+            DEBUG_4G_PRINTF(" UART_AT RX: %s\r\n", dump);
+        }
+
+        // 解析 RX 数据
         s_rx_data_ready = false;
         parse_rx_lines_budget(64);
     }
