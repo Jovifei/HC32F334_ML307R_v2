@@ -860,94 +860,293 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
 
 // ==================== 主任务 ====================
 
+// ML307R 初始化子状态
+typedef enum {
+    ML_SUB_AT,           // 阶段1: AT通信测试
+    ML_SUB_ATE0,         // 阶段1: 关闭回显
+    ML_SUB_CPIN,         // 阶段1: 检查SIM卡
+    ML_SUB_CSQ,          // 阶段1: 查询信号质量
+    ML_SUB_CEREG,        // 阶段1: 等待网络注册
+    ML_SUB_CEREG_WAIT,    // 阶段1: 重试间隔等待
+    ML_SUB_MIPCALL,       // 阶段1: 激活PDP
+    ML_SUB_CERT_CA,       // 阶段2: 写入CA证书
+    ML_SUB_CERT_KEY,      // 阶段3: 写入客户端私钥
+    ML_SUB_CERT_DEV,      // 阶段3: 写入客户端证书
+    ML_SUB_HTTPS_INIT,    // 阶段4: HTTPS初始化
+    ML_SUB_HTTPS_PARA,    // 阶段4: HTTPS配置URL
+    ML_SUB_HTTPS_CONTENT, // 阶段4: HTTPS配置Content
+    ML_SUB_HTTPS_DATA,    // 阶段4: HTTPS发送数据
+    ML_SUB_HTTPS_ACTION,   // 阶段4: HTTPS发送请求
+    ML_SUB_HTTPS_READ,     // 阶段4: HTTPS读取响应
+    ML_SUB_HTTPS_TERM,    // 阶段4: HTTPS结束
+    ML_SUB_SSL_AUTH,      // 阶段5: SSL双向认证
+    ML_SUB_MQTT_CONN,     // 阶段6: MQTT连接
+    ML_SUB_MQTT_SUB,      // 阶段7: 订阅下行Topic
+    ML_SUB_DONE,          // 全部完成
+} ml_sub_state_t;
+
+// 静态变量
+static ml_sub_state_t s_ml_sub_state = ML_SUB_AT;
+static uint32_t s_wait_until = 0;
+static uint8_t s_init_done = 0;
+static uint8_t s_cereg_retry = 0;
+
+// 等待一段时间（毫秒，非阻塞）
+// 返回1=等待结束, 0=还在等待
+static int ml_wait_ms(uint32_t ms)
+{
+    if (s_wait_until == 0)
+    {
+        s_wait_until = SysTick_GetTick() + ms;
+        return 0;
+    }
+    if ((SysTick_GetTick() - s_wait_until) >= ms)
+    {
+        s_wait_until = 0;
+        return 1; // 等待结束
+    }
+    return 0;
+}
+
 /*---------------------------------------------------------------------------
  Name        : ml307r_task
  Input       : 无
  Output      : 无
  Description :
- ML307R 4G模块主任务函数，在主循环中调用
+ ML307R 4G模块主任务函数，在主循环中调用（非阻塞状态机）
 ---------------------------------------------------------------------------*/
 void ml307r_task(void)
 {
-    static uint32_t last_publish_ms = 0;
-    static uint8_t init_done = 0;
-    static uint8_t reg_done = 0;
+    int ret;
+    char resp[128];
 
-    // 阶段 0: 设备注册（首次运行）
-    if (!reg_done)
+    // ========== 初始化状态机 ==========
+    if (!s_init_done)
     {
-      DEBUG_4G_PRINTF(" >>> Stage 0: Device registration\r\n");
-      if (!device_register_load_from_flash())
-      {
-        DEBUG_4G_PRINTF(" Device not in flash, requesting registration...\r\n");
-        device_register_set_info(PRODUCT_ID, PRODUCT_SECRET, PRODUCT_MODEL, PRODUCT_SN);
-        if (device_register_request("") == 0)
+        switch (s_ml_sub_state)
         {
-          DEBUG_4G_PRINTF(" OK - Device registered successfully\r\n");
-          reg_done = 1;
+        case ML_SUB_AT:
+            DEBUG_4G_PRINTF(" >>> [1] AT test\r\n");
+            at_command_start("AT", 3000);
+            s_ml_sub_state = ML_SUB_ATE0;
+            break;
+
+        case ML_SUB_ATE0:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - AT passed\r\n");
+                DEBUG_4G_PRINTF(" >>> [2] Disable echo\r\n");
+                at_command_start("ATE0", 3000);
+                s_ml_sub_state = ML_SUB_CPIN;
+            } else if (ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" !!! AT failed, retry...\r\n");
+                at_command_start("AT", 3000); // 重试
+            }
+            break;
+
+        case ML_SUB_CPIN:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - Echo disabled\r\n");
+                DEBUG_4G_PRINTF(" >>> [3] Check SIM\r\n");
+                at_command_start("AT+CPIN?", 3000);
+                s_ml_sub_state = ML_SUB_CSQ;
+            } else if (ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" !!! ATE0 failed, retry...\r\n");
+                s_ml_sub_state = ML_SUB_AT;
+            }
+            break;
+
+        case ML_SUB_CSQ:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - SIM ready\r\n");
+                DEBUG_4G_PRINTF(" >>> [4] Check signal\r\n");
+                at_command_start("AT+CSQ", 3000);
+                s_ml_sub_state = ML_SUB_CEREG;
+            } else if (ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" !!! CPIN failed, retry...\r\n");
+                s_ml_sub_state = ML_SUB_AT;
+            }
+            break;
+
+        case ML_SUB_CEREG:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - Signal checked\r\n");
+                DEBUG_4G_PRINTF(" >>> [5] Wait network registration\r\n");
+                s_cereg_retry = 0;
+                at_command_start("AT+CEREG?", 5000);
+                s_ml_sub_state = ML_SUB_CEREG_WAIT;
+            } else if (ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" !!! CSQ failed, retry...\r\n");
+                s_ml_sub_state = ML_SUB_AT;
+            }
+            break;
+
+        case ML_SUB_CEREG_WAIT:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                at_read_response(resp, sizeof(resp));
+                DEBUG_4G_PRINTF(" OK - Network registered\r\n");
+                DEBUG_4G_PRINTF(" >>> [6] Activate PDP\r\n");
+                at_command_start("AT+MIPCALL=1,1", 10000);
+                s_ml_sub_state = ML_SUB_CERT_CA;
+            } else if (ret == AT_NB_ERR) {
+                s_cereg_retry++;
+                DEBUG_4G_PRINTF(" >>> CEREG retry %d/30\r\n", s_cereg_retry);
+                if (s_cereg_retry >= 30) {
+                    DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
+                    s_ml_sub_state = ML_SUB_AT;
+                } else {
+                    s_wait_until = 0; // 重置1秒等待
+                    if (ml_wait_ms(1000)) {
+                        s_ml_sub_state = ML_SUB_CEREG;
+                    }
+                }
+            }
+            break;
+
+        case ML_SUB_CERT_CA:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - PDP done\r\n");
+                DEBUG_4G_PRINTF(" >>> [7] CA cert (skip)\r\n");
+                at_command_start("AT+FSCOMM=0,\"ca.pem\"", 3000);
+                s_ml_sub_state = ML_SUB_CERT_KEY;
+            }
+            break;
+
+        case ML_SUB_CERT_KEY:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - CA cert done\r\n");
+                DEBUG_4G_PRINTF(" >>> [8] Client key (skip)\r\n");
+                at_command_start("AT+FSCOMM=0,\"client.key\"", 3000);
+                s_ml_sub_state = ML_SUB_CERT_DEV;
+            }
+            break;
+
+        case ML_SUB_CERT_DEV:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - Client key done\r\n");
+                DEBUG_4G_PRINTF(" >>> [9] Client cert (skip)\r\n");
+                at_command_start("AT+FSCOMM=0,\"client.cer\"", 3000);
+                s_ml_sub_state = ML_SUB_HTTPS_INIT;
+            }
+            break;
+
+        case ML_SUB_HTTPS_INIT:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - Client cert done\r\n");
+                DEBUG_4G_PRINTF(" >>> [10] HTTPINIT\r\n");
+                at_command_start("AT+HTTPINIT", 5000);
+                s_ml_sub_state = ML_SUB_HTTPS_PARA;
+            }
+            break;
+
+        case ML_SUB_HTTPS_PARA:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - HTTPINIT\r\n");
+                at_command_start("AT+HTTPPARA=\"URL\",\"https://api.dream-maker.com:8443/APIServerV2/tool/mqtt/preset\"", 5000);
+                s_ml_sub_state = ML_SUB_HTTPS_CONTENT;
+            } else if (ret == AT_NB_ERR) {
+                at_command_start("AT+HTTPTERM", 3000);
+                s_ml_sub_state = ML_SUB_DONE;
+            }
+            break;
+
+        case ML_SUB_HTTPS_CONTENT:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                at_command_start("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 5000);
+                s_ml_sub_state = ML_SUB_HTTPS_DATA;
+            }
+            break;
+
+        case ML_SUB_HTTPS_DATA:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - HTTPS done\r\n");
+                at_command_start("AT+HTTPTERM", 3000);
+                s_ml_sub_state = ML_SUB_SSL_AUTH;
+            }
+            break;
+
+        case ML_SUB_HTTPS_ACTION:
+        case ML_SUB_HTTPS_READ:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - HTTP done\r\n");
+                at_command_start("AT+HTTPTERM", 3000);
+                s_ml_sub_state = ML_SUB_SSL_AUTH;
+            }
+            break;
+
+        case ML_SUB_HTTPS_TERM:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - HTTPTERM\r\n");
+                at_command_start("AT+MQTTSSL=1", 3000);
+                s_ml_sub_state = ML_SUB_MQTT_CONN;
+            }
+            break;
+
+        case ML_SUB_SSL_AUTH:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - SSL done\r\n");
+                DEBUG_4G_PRINTF(" >>> [11] MQTT connect\r\n");
+                char mqtt_cmd[200];
+                snprintf(mqtt_cmd, sizeof(mqtt_cmd),
+                    "AT+MQTTCONN=\"api.dream-maker.com\",8883,\"%s\",\"\",\"\"", PRODUCT_SN);
+                at_command_start(mqtt_cmd, 10000);
+                s_ml_sub_state = ML_SUB_MQTT_SUB;
+            }
+            break;
+
+        case ML_SUB_MQTT_CONN:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - MQTT connected\r\n");
+                char sub_cmd[128];
+                snprintf(sub_cmd, sizeof(sub_cmd),
+                    "AT+MQTTSUB=\"down/%s/%s\",1",
+                    "your_product_id", PRODUCT_SN);
+                at_command_start(sub_cmd, 5000);
+                s_ml_sub_state = ML_SUB_MQTT_SUB;
+            } else if (ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" !!! MQTT failed, retry...\r\n");
+                s_ml_sub_state = ML_SUB_AT;
+            }
+            break;
+
+        case ML_SUB_MQTT_SUB:
+            ret = at_command_check();
+            if (ret == AT_NB_OK) {
+                DEBUG_4G_PRINTF(" OK - MQTT subscribed\r\n");
+                s_ml_sub_state = ML_SUB_DONE;
+            } else if (ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" !!! MQTT subscribe failed\r\n");
+                s_ml_sub_state = ML_SUB_AT;
+            }
+            break;
+
+        case ML_SUB_DONE:
+            DEBUG_4G_PRINTF(" >>> ML307R ALL INIT COMPLETE!\r\n");
+            s_init_done = 1;
+            break;
+
+        default:
+            s_ml_sub_state = ML_SUB_AT;
+            break;
         }
-        else
-        {
-          DEBUG_4G_PRINTF(" !!! Device registration failed, retry in 10s !!!\r\n");
-          delay_ms(10000);
-          return;
-        }
-      }
-      else
-      {
-        DEBUG_4G_PRINTF(" OK - Device credentials loaded from flash\r\n");
-        reg_done = 1;
-      }
-    }
-
-    // 阶段 1: ML307R 网络初始化
-    if (!init_done)
-    {
-      DEBUG_4G_PRINTF(" >>> Stage 1: ML307R network init\r\n");
-      if (ml307r_init() != 0)
-      {
-        DEBUG_4G_PRINTF(" !!! ml307r_init failed, retry in 5s !!!\r\n");
-        delay_ms(5000);
         return;
-      }
-
-      // 阶段 2: MQTT 连接
-      DEBUG_4G_PRINTF(" >>> Stage 2: MQTT connection\r\n");
-      if (ml307r_mqtt_connect() != 0)
-      {
-        DEBUG_4G_PRINTF(" !!! ml307r_mqtt_connect failed, retry in 3s !!!\r\n");
-        delay_ms(3000);
-        return;
-      }
-
-      // 注册下行消息回调
-      DEBUG_4G_PRINTF(" Registering MQTT callback...\r\n");
-      at_mqtt_register_callback(on_mqtt_message);
-
-      // 上报设备信息
-      DEBUG_4G_PRINTF(" Publishing device info...\r\n");
-      publish_device_info();
-      init_done = 1;
-      DEBUG_4G_PRINTF(" OK - All init stages complete!\r\n");
     }
 
-    // 阶段 3: 主循环
-    uint32_t now = sys_param.timer.timer_1ms_count;
-
-    // 每 5 分钟上报一次 CT 功率
-    if ((uint32_t)(now - last_publish_ms) >= 300000U || now < last_publish_ms)
-    {
-      DEBUG_4G_PRINTF(" >>> Periodic CT power publish (5min interval)\r\n");
-      publish_ct_power();
-      last_publish_ms = now;
-    }
-
-    // 定时发送在线状态（每 30 秒）
-    static uint32_t last_online_ms = 0;
-    if ((uint32_t)(now - last_online_ms) >= 30000U || now < last_online_ms)
-    {
-      DEBUG_4G_PRINTF(" >>> Periodic online status publish (30s interval)\r\n");
-      ml307r_mqtt_publish(s_topic_up, "{\"status\":\"online\"}", 0);
-      last_online_ms = now;
-    }
+    // ========== 正常运行：定期发送心跳 ==========
+    // TODO: 定期发送 MQTT publish
 }

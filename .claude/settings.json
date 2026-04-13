@@ -3,7 +3,10 @@
     "allow": [
       "Read(//c/Users/lxxlx/.claude/**)",
       "Bash(pandoc --track-changes=all \"ML307R_串口调试操作步骤.docx\" -o /tmp/serial_steps.md)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(where uv4:*)",
+      "Read(//c/Program Files/Keil/UV4/**)",
+      "Read(//c/Program Files \\(x86\\)/Keil/UV4/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\lxxlx\\.claude"

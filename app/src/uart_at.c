@@ -175,7 +175,7 @@ int at_send_command(const char *cmd, const char *expected_ok,
     while (USART_GetStatus(CM_USART2, USART_FLAG_TX_CPLT) == RESET)
         ;
     // TX发送完成后在主循环打印调试信息（不在中断上下文）
-    DEBUG_4G_PRINTF(" UART_AT: TX %d bytes complete\r\n", len);
+    // DEBUG_4G_PRINTF(" UART_AT: TX %d bytes complete\r\n", len);
 
     // 等待响应（改进的非阻塞轮询）
     s_cmd_result = 0;
@@ -257,32 +257,96 @@ void uart_at_process(void)
 {
     if (s_rx_data_ready || (s_rx_head != s_rx_tail))
     {
-        // 打印收到的原始数据（不消费缓冲区，只快照）
-        uint16_t snap_tail = s_rx_tail;
-        uint16_t count = 0;
-        char dump[128];
-        while (snap_tail != s_rx_head && count < sizeof(dump) - 1)
-        {
-            uint8_t ch = s_rx_buf[snap_tail];
-            snap_tail = (snap_tail + 1) % UART_AT_RX_BUF_SIZE;
-            if (ch >= 0x20 && ch < 0x7F)
-                dump[count++] = (char)ch;
-            else if (ch == '\r' || ch == '\n')
-            {
-                if (count > 0 && count < sizeof(dump) - 1)
-                    dump[count++] = '\n';
-            }
-            else
-                count += snprintf(dump + count, sizeof(dump) - count, "[0x%02X]", ch);
-        }
-        if (count > 0)
-        {
-            dump[count] = '\0';
-            DEBUG_4G_PRINTF(" UART_AT RX: %s\r\n", dump);
-        }
-
         // 解析 RX 数据
+        parse_rx_lines_budget(64);
+
+        // 只有缓冲区空了才清标志，否则保留让下次继续处理
+        if (s_rx_head == s_rx_tail)
+            s_rx_data_ready = false;
+    }
+}
+
+// ==================== 非阻塞 AT 命令接口 ====================
+
+static at_nb_state_t s_nb_state = AT_NB_IDLE;
+static uint32_t s_nb_start = 0;
+static uint32_t s_nb_timeout = 0;
+
+int at_command_start(const char *cmd, uint32_t timeout_ms)
+{
+    if (cmd == NULL)
+        return -1;
+
+    if (s_nb_state == AT_NB_WAITING)
+        return 0; // 还在等待上一次
+
+    at_flush_rx();
+    char cmd_buf[320];
+    snprintf(cmd_buf, sizeof(cmd_buf), "%s\r\n", cmd);
+    uint16_t len = (uint16_t)strlen(cmd_buf);
+    for (uint16_t i = 0; i < len; i++)
+    {
+        while (USART_GetStatus(CM_USART2, USART_FLAG_TX_EMPTY) == RESET)
+            ;
+        USART_WriteData(CM_USART2, (uint16_t)cmd_buf[i]);
+    }
+    while (USART_GetStatus(CM_USART2, USART_FLAG_TX_CPLT) == RESET)
+        ;
+
+    s_nb_state = AT_NB_WAITING;
+    s_nb_start = SysTick_GetTick();
+    s_nb_timeout = timeout_ms;
+    return 0;
+}
+
+int at_command_check(void)
+{
+    if (s_nb_state == AT_NB_IDLE)
+        return AT_NB_IDLE;
+
+    // 检查AT响应结果（由 handle_parsed_line 设置）
+    if (s_cmd_result == 1)
+    {
+        s_nb_state = AT_NB_OK;
+        s_cmd_result = 0;
+        return AT_NB_OK;
+    }
+    if (s_cmd_result == -1)
+    {
+        s_nb_state = AT_NB_ERR;
+        s_cmd_result = 0;
+        return AT_NB_ERR;
+    }
+
+    // 处理RX数据
+    if (s_rx_data_ready || s_rx_head != s_rx_tail)
+    {
         s_rx_data_ready = false;
         parse_rx_lines_budget(64);
     }
+
+    // 检查超时
+    if ((SysTick_GetTick() - s_nb_start) >= s_nb_timeout)
+    {
+        s_nb_state = AT_NB_ERR;
+        s_cmd_result = 0;
+        return AT_NB_ERR;
+    }
+
+    return AT_NB_WAITING;
+}
+
+int at_read_response(char *buf, int len)
+{
+    if (buf == NULL || len <= 0)
+        return 0;
+    int copied = 0;
+    while (s_rx_tail != s_rx_head && copied < len - 1)
+    {
+        uint8_t ch = s_rx_buf[s_rx_tail];
+        s_rx_tail = (s_rx_tail + 1) % UART_AT_RX_BUF_SIZE;
+        buf[copied++] = (char)ch;
+    }
+    buf[copied] = '\0';
+    return copied;
 }

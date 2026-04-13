@@ -129,10 +129,6 @@ int main(void)
 
     printf("================ Start Normal Run ================ \r\n");
 
-    // 测试：毝5秒坑逝一次AT，丝等待哝应
-    // 使用SysTick的1ms标志，丝冝依赖ADC定时器
-    static uint16_t at_send_counter = 0;
-    static uint32_t last_debug_1s = 0;
     while (1)
     {
 
@@ -150,7 +146,7 @@ int main(void)
         grid_task();
 
         // ��鲢����LED��������
-        // mmi_task(); // 暂时禝用
+        // mmi_task();
 
         // ��鲢�������Է�������?
         debug_task();
@@ -2168,22 +2164,9 @@ static void param_update_1s_task(void)
         // ����hmi����
         hmi_update_all_params();
 
-        // ml307r_task();
+        ml307r_task();
 
-       DEBUG_4G_PRINTF("  ml307r_task 1s end\r\n");
-
-        // 毝5秒坑逝一次AT（放在1s定时器里，时间准）
-        static uint8_t s_5s_tick = 0;
-        s_5s_tick++;
-        if (s_5s_tick >= 5)
-        {
-            s_5s_tick = 0;
-            at_flush_rx();
-            char at_cmd[] = "AT\r\n";
-            at_send_raw((const uint8_t*)at_cmd, sizeof(at_cmd) - 1);
-            DEBUG_4G_PRINTF("[TEST] AT sent\r\n");
-        }
-
+        DEBUG_4G_PRINTF("  ml307r_task 1s end\r\n");
 
         // �ȼ��Ƶ���Ƿ��й���?
         if (sys_param.fault.bit.grid_frequency)
