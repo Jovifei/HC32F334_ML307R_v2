@@ -218,7 +218,7 @@ int at_send_command(const char *cmd, const char *expected_ok,
         if (s_rx_data_ready || (s_rx_head != s_rx_tail))
         {
             s_rx_data_ready = false;
-            parse_rx_lines_budget(64);
+            parse_rx_lines_budget(256);
         }
 
         // 超时检查（使用 SysTick 计数器，不依�? ADC 中断�?
@@ -293,7 +293,7 @@ void uart_at_process(void)
     if (s_rx_data_ready || (s_rx_head != s_rx_tail))
     {
         // 解析 RX 数据
-        parse_rx_lines_budget(64);
+        parse_rx_lines_budget(256);
 
         // 只有缓冲区空了才清标志，否则保留让下次继续处�?
         if (s_rx_head == s_rx_tail)
@@ -357,7 +357,7 @@ int at_command_check(void)
     if (s_rx_data_ready || s_rx_head != s_rx_tail)
     {
         s_rx_data_ready = false;
-        parse_rx_lines_budget(64);
+        parse_rx_lines_budget(256);
     }
 
     // 检查超�?
