@@ -3,6 +3,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "device_register.h"
+#include "iot.h"
 #include "main.h"
 #include "uart_at.h"
 #include <stdio.h>
@@ -1890,6 +1891,8 @@ void ml307r_task(void)
             ret = at_command_check();
             if (ret == AT_NB_OK) {
                 DEBUG_4G_PRINTF(" OK - MQTT subscribed\r\n");
+                // 设置iot下行回调
+                ml307r_mqtt_set_downlink_callback(iot_mqtt_downlink_handler);
                 s_ml_sub_state = ML_SUB_DONE;
             } else if (ret == AT_NB_ERR) {
                 int err_code = at_get_last_error_code();
@@ -1919,10 +1922,13 @@ void ml307r_task(void)
         return;
     }
 
-    // ========== ???????????????????? ==========
-    // TODO: ??????? MQTT publish (replaced below)
+    // ========== 主循环 ==========
+    // IoT任务处理
+    if (ml307r_mqtt_is_connected()) {
+        iot_task();
+    }
 
-    // ========== ?????????????? + ????? ==========
+    // ========== 保持连接 + 发布数据 ==========
 
     // ?? MQTT ?? URC (+MQTTURC: "disc")
     if (g_mqtt_disc_code >= 0) {
