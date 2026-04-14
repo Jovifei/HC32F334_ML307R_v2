@@ -175,6 +175,9 @@ int main(void)
         // ����1s����
         param_update_1s_task();
 
+        // ML307R 4G模组任务（非阻塞状态机，每次主循环执行）
+        ml307r_task();
+
         // sub1g���ݽ��մ���
         sub1g_rx_task();
 
@@ -2160,8 +2163,6 @@ static void param_update_1s_task(void)
 
         // ����hmi����
         hmi_update_all_params();
-
-        ml307r_task();
 
         // �ȼ��Ƶ���Ƿ��й���?
         if (sys_param.fault.bit.grid_frequency)
