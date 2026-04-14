@@ -8,11 +8,11 @@
 // SysTick 计数器（�? hc32_ll_utility.c 提供，不依赖 ADC 中断�?
 extern uint32_t SysTick_GetTick(void);
 
-#define UART_AT_RX_BUF_SIZE 256
+#define UART_AT_RX_BUF_SIZE 1024
 
-// ==================== 静态变�? ====================
+// ==================== 静态变量 ====================
 
-static uint8_t s_rx_buf[256];
+static uint8_t s_rx_buf[1024];
 static volatile uint16_t s_rx_head =
     0;                         // 写指针（中断写入�???
 static uint16_t s_rx_tail = 0; // 读指针（任务读取�???
@@ -30,18 +30,18 @@ static volatile bool s_got_prompt = false;
 static volatile bool s_got_ok  = false;
 static volatile bool s_got_err = false;
 
-// RX line assembly buffer (foreground parsing)
-static char s_line_buf[256];
+// RX line assembly buffer (foreground parsing) - 512 bytes to handle long HTTP header lines
+static char s_line_buf[512];
 static uint16_t s_line_len = 0;
 
-// URC 回调�???
+// URC 回调表（8 slots: MQTTURC, MHTTPURC, CEREG, MIPCALL etc.）
 typedef struct
 {
     char keyword[24];
     urc_callback_t cb;
     bool used;
 } urc_entry_t;
-static urc_entry_t s_urc_tbl[4];
+static urc_entry_t s_urc_tbl[8];
 
 // 错误码追踪（AT命令返回CME/CMS ERROR时填充）
 static int s_last_error_code = -1;

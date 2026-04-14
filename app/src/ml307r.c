@@ -962,7 +962,8 @@ typedef enum {
     ML_SUB_CSQ,          // �׶�1: ��ѯ�ź�����
     ML_SUB_CEREG,        // �׶�1: �ȴ�����ע��
     ML_SUB_CEREG_WAIT,    // �׶�1: ���Լ���ȴ�?
-    ML_SUB_MIPCALL,       // �׶�1: ����PDP
+    ML_SUB_MIPCALL,       // 阶段1: 激活PDP
+    ML_SUB_MIPCALL_DEACT, // 阶段1: 去激活PDP（CME ERROR 50后重试）
     ML_SUB_CERT_CA,       // �׶�2: д��CA֤��
     ML_SUB_CERT_KEY,      // �׶�3: д��ͻ���˽�?
     ML_SUB_CERT_DEV,      // �׶�3: д��ͻ���֤��?
@@ -1000,6 +1001,7 @@ static ml_sub_state_t s_ml_sub_state = ML_SUB_AT;
 static uint32_t s_wait_until = 0;
 static uint8_t s_init_done = 0;
 static uint8_t s_cereg_retry = 0;
+static int s_cereg_stat = -1;              // +CEREG: <n>,<stat> 中的 stat 字段（1=home, 5=roaming）
 static cert_step_t s_cert_step = CERT_STEP_CMD;  // 证书写入步骤
 static uint32_t s_cert_wait_start = 0;            // 证书等待计时起点
 
@@ -1169,6 +1171,21 @@ static const char *mqtt_conn_result_str(int code)
     }
 }
 
+// URC回调：捕获 +CEREG: <n>,<stat> 中的网络注册状态
+// stat: 1=home registered, 5=roaming registered, 0/2/3/4=not registered
+static void cereg_urc_callback(const char *line)
+{
+    if (line == NULL)
+        return;
+    int n = -1, stat = -1;
+    if (sscanf(line, "+CEREG: %d,%d", &n, &stat) == 2) {
+        s_cereg_stat = stat;
+    } else if (sscanf(line, "+CEREG: %d", &stat) == 1) {
+        // URC 格式（无n）: +CEREG: <stat>
+        s_cereg_stat = stat;
+    }
+}
+
 /*---------------------------------------------------------------------------
  Name        : ml307r_task
  Input       : 无
@@ -1184,9 +1201,11 @@ void ml307r_task(void)
     // ========== ��ʼ��״̬�� ==========
     if (!s_init_done)
     {
-        // 注册一�?? URC 回调（用�?? HTTPS 响应解析�??
+        // 注册 URC 回调（仅注册一次）
         if (!s_urc_registered) {
-            at_register_urc("+MHTTPURC", https_urc_callback);
+            at_register_urc("+MHTTPURC", https_urc_callback);  // HTTPS 内容解析
+            at_register_urc("+CEREG:", cereg_urc_callback);     // 网络注册状态捕获
+            at_mqtt_register_callback(on_mqtt_message);          // MQTT URC + 消息回调
             s_urc_registered = 1;
         }
 
@@ -1262,11 +1281,28 @@ void ml307r_task(void)
         case ML_SUB_CEREG_WAIT:
             ret = at_command_check();
             if (ret == AT_NB_OK) {
-                at_read_response(resp, sizeof(resp));
-                DEBUG_4G_PRINTF(" OK - Network registered\r\n");
-                DEBUG_4G_PRINTF(" >>> [6] Activate PDP\r\n");
-                at_command_start("AT+MIPCALL=1,1", 10000);
-                s_ml_sub_state = ML_SUB_MIPCALL;
+                // s_cereg_stat 由 cereg_urc_callback 在收到 +CEREG: 行时更新
+                // stat=1 (home) 或 stat=5 (roaming) 代表已注册
+                if (s_cereg_stat == 1 || s_cereg_stat == 5) {
+                    DEBUG_4G_PRINTF(" OK - Network registered (stat=%d)\r\n", s_cereg_stat);
+                    DEBUG_4G_PRINTF(" >>> [6] Activate PDP\r\n");
+                    at_command_start("AT+MIPCALL=1,1", 10000);
+                    s_ml_sub_state = ML_SUB_MIPCALL;
+                } else {
+                    // 已注册命令OK但stat不合法，等待重试
+                    s_cereg_retry++;
+                    DEBUG_4G_PRINTF(" >>> CEREG stat=%d not registered, retry %d/30\r\n",
+                                    s_cereg_stat, s_cereg_retry);
+                    if (s_cereg_retry >= 30) {
+                        DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
+                        s_ml_sub_state = ML_SUB_AT;
+                    } else {
+                        s_wait_until = 0;
+                        if (ml_wait_ms(2000)) {
+                            s_ml_sub_state = ML_SUB_CEREG;
+                        }
+                    }
+                }
             } else if (ret == AT_NB_ERR) {
                 s_cereg_retry++;
                 DEBUG_4G_PRINTF(" >>> CEREG retry %d/30\r\n", s_cereg_retry);
@@ -1274,8 +1310,8 @@ void ml307r_task(void)
                     DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    s_wait_until = 0; // ����1��ȴ�?
-                    if (ml_wait_ms(1000)) {
+                    s_wait_until = 0;
+                    if (ml_wait_ms(2000)) {
                         s_ml_sub_state = ML_SUB_CEREG;
                     }
                 }
@@ -1289,8 +1325,28 @@ void ml307r_task(void)
                 s_cert_step = CERT_STEP_CMD;
                 s_ml_sub_state = ML_SUB_CERT_CA;
             } else if (ret == AT_NB_ERR) {
-                DEBUG_4G_PRINTF(" !!! MIPCALL failed, retry...\r\n");
-                s_ml_sub_state = ML_SUB_AT;
+                int err_code = at_get_last_error_code();
+                DEBUG_4G_PRINTF(" !!! MIPCALL failed (err=%d)\r\n", err_code);
+                if (err_code == 50) {
+                    // CME ERROR 50: PDP context already active, deactivate first
+                    DEBUG_4G_PRINTF(" >>> PDP already active, deactivating...\r\n");
+                    at_command_start("AT+MIPCALL=0,1", 5000);
+                    s_ml_sub_state = ML_SUB_MIPCALL_DEACT;
+                } else {
+                    // Other errors: retry from CEREG (not full restart)
+                    DEBUG_4G_PRINTF(" >>> Retry from network check\r\n");
+                    s_cereg_retry = 0;
+                    s_ml_sub_state = ML_SUB_CEREG;
+                }
+            }
+            break;
+
+        case ML_SUB_MIPCALL_DEACT:
+            ret = at_command_check();
+            if (ret == AT_NB_OK || ret == AT_NB_ERR) {
+                DEBUG_4G_PRINTF(" OK - PDP deactivated, retrying activation\r\n");
+                at_command_start("AT+MIPCALL=1,1", 10000);
+                s_ml_sub_state = ML_SUB_MIPCALL;
             }
             break;
 
@@ -1599,7 +1655,14 @@ void ml307r_task(void)
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
             DEBUG_4G_PRINTF(" OK - HTTP instance deleted\r\n");
-            s_ml_sub_state = ML_SUB_SSL_AUTH;
+            if (!s_https_reg_done) {
+                // 注册尚未完成，重试 HTTPS 注册流程
+                DEBUG_4G_PRINTF(" >>> HTTPS reg not done, retrying...\r\n");
+                s_ml_sub_state = ML_SUB_HTTPS_SSL_CFG;
+            } else {
+                // 注册已完成，继续 SSL 双向认证
+                s_ml_sub_state = ML_SUB_SSL_AUTH;
+            }
             break;
 
         // ==================== 阶段5: SSL双向认证 ====================
