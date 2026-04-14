@@ -25,9 +25,102 @@ static bool s_iot_connected = false;
 #define PROP_CT_MS_INTERVAL    300000  // CT定时上报: 5分钟
 #define PROP_INV_MS_INTERVAL   180000 // INV定时上报: 3分钟
 
-void iot_mqtt_downlink_handler(const char *topic, const char *payload) {
-    (void)topic;
+// 简单的JSON解析：提取method和id
+// payload格式: {"method":"get_properties","params":[...],"id":123}
+// 返回0成功，-1失败
+static int iot_json_parse_method(const char *payload, char *method, int method_len, int *msg_id) {
+    const char *p = payload;
+    const char *method_start;
+    const char *id_start;
+    char id_buf[16] = {0};
+
+    if (payload == NULL || method == NULL || msg_id == NULL) {
+        return -1;
+    }
+
+    // 查找 "method":"
+    p = strstr(payload, "\"method\":\"");
+    if (p == NULL) {
+        return -1;
+    }
+    p += strlen("\"method\":\"");
+    method_start = p;
+
+    // 查找 method 值的结束引号
+    p = strchr(p, '"');
+    if (p == NULL) {
+        return -1;
+    }
+
+    // 复制 method
+    int method_copy_len = (p - method_start < method_len - 1) ? (p - method_start) : (method_len - 1);
+    strncpy(method, method_start, method_copy_len);
+    method[method_copy_len] = '\0';
+
+    // 查找 "id":
+    p = strstr(p, "\"id\":");
+    if (p == NULL) {
+        return -1;
+    }
+    p += strlen("\"id\":");
+
+    // 跳过空格
+    while (*p == ' ') {
+        p++;
+    }
+
+    // 提取 id 值
+    id_start = p;
+    p = strchr(p, ',');
+    if (p == NULL) {
+        // id可能是最后一个字段，查找 }
+        p = strchr(id_start, '}');
+    }
+    if (p == NULL) {
+        return -1;
+    }
+
+    int id_len = (p - id_start < sizeof(id_buf) - 1) ? (p - id_start) : (sizeof(id_buf) - 1);
+    strncpy(id_buf, id_start, id_len);
+    id_buf[id_len] = '\0';
+
+    *msg_id = atoi(id_buf);
+    return 0;
+}
+
+static void iot_handle_get_properties(int msg_id, const char *payload) {
+    (void)msg_id;
     (void)payload;
+    // TODO: 完整实现
+}
+
+static void iot_handle_set_properties(int msg_id, const char *payload) {
+    (void)msg_id;
+    (void)payload;
+    // TODO: 完整实现
+}
+
+static void iot_handle_action(int msg_id, const char *payload) {
+    (void)msg_id;
+    (void)payload;
+    // TODO: 完整实现
+}
+
+void iot_mqtt_downlink_handler(const char *topic, const char *payload) {
+    char method[32] = {0};
+    int msg_id = 0;
+
+    if (iot_json_parse_method(payload, method, sizeof(method), &msg_id) != 0) {
+        return;
+    }
+
+    if (strcmp(method, "get_properties") == 0) {
+        iot_handle_get_properties(msg_id, payload);
+    } else if (strcmp(method, "set_properties") == 0) {
+        iot_handle_set_properties(msg_id, payload);
+    } else if (strcmp(method, "action") == 0) {
+        iot_handle_action(msg_id, payload);
+    }
 }
 
 void iot_report_immediate(uint8_t inv_idx) {
