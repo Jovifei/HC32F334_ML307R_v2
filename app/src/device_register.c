@@ -120,6 +120,28 @@ void device_register_set_info(const char *product_id, const char *product_secret
 }
 
 /*---------------------------------------------------------------------------
+ Name        : device_register_set_credentials
+ Input       : device_id - 设备ID字符串
+               device_key - 设备密钥字符串
+ Output      : 无
+ Description :
+ 设置 device_id 和 device_key 到内部 s_cred，并标记为已注册。
+ 由 ml307r.c 的 URC 回调调用（在解析 +MHTTPURC 响应后）。
+---------------------------------------------------------------------------*/
+void device_register_set_credentials(const char *device_id, const char *device_key)
+{
+    if (device_id) {
+        strncpy(s_cred.device_id, device_id, sizeof(s_cred.device_id) - 1);
+        s_cred.device_id[sizeof(s_cred.device_id) - 1] = '\0';
+    }
+    if (device_key) {
+        strncpy(s_cred.device_key, device_key, sizeof(s_cred.device_key) - 1);
+        s_cred.device_key[sizeof(s_cred.device_key) - 1] = '\0';
+    }
+    s_cred.valid = 0x55;
+}
+
+/*---------------------------------------------------------------------------
  Name        : device_register_request
  Input       : mark - ��ע�ֶ�(��ѡ)�����ڷ����������Դ/���Σ���ΪNULL
  Output      : 0=�ɹ�, -1=ʧ��

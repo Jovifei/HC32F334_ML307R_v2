@@ -37,6 +37,18 @@ int at_send_command(const char *cmd, const char *expected_ok,
                     uint32_t timeout_ms, char *response, int resp_len);
 
 /**
+ * 获取最近一次 AT 命令解析到的错误码（如 +CME ERROR: <err> / +CMS ERROR: <err>）
+ * @return >=0: 错误码；-1: 未记录到错误码
+ */
+int at_get_last_error_code(void);
+
+/**
+ * 获取最近一次 AT 命令解析到的错误文本行（如 "+CME ERROR: 50"）
+ * @return 指向内部静态缓冲区的指针；若无则返回空字符串
+ */
+const char *at_get_last_error_line(void);
+
+/**
  * ����ԭʼ����(������Ӧ)
  * ����XMODEM OTA����
  * @param data ����ָ��
@@ -85,5 +97,27 @@ int at_command_check(void);
  * @return 实际读取的字节数
  */
 int at_read_response(char *buf, int len);
+
+/**
+ * 检查RX缓冲区是否包含指定字符串（用于检测>提示符等）
+ * @param str 要查找的字符串
+ * @return 1=包含, 0=不包含
+ */
+int at_rx_contains(const char *str);
+
+/**
+ * 检查是否收到 > 提示符（自动清除标志）
+ * 由 parse_rx_lines_budget 在检测到 > 行首字符时设置
+ * 用于证书写入两步协议中等待 > 的场景
+ * @return true=收到, false=未收到
+ */
+bool at_got_prompt(void);
+
+/**
+ * 检查最近一次 AT 命令的 OK/ERROR 结果（自动清除标志）
+ * 用于证书写入完成后检测 OK 的场景（不依赖 at_command_start/check 状态机）
+ * @return 1=OK, -1=ERROR/CME ERROR, 0=尚未收到
+ */
+int at_check_last_result(void);
 
 #endif // UART_AT_H

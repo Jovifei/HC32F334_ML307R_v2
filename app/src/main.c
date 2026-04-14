@@ -132,7 +132,7 @@ int main(void)
     while (1)
     {
 
-        // 处睆UART AT收到的数杮（暂时禝用）
+        // 处睆UART AT收到的数杮
         uart_at_process();
 
         // ��鲢����״̬������? - 50us��ADC�ж��и���־
@@ -169,11 +169,8 @@ int main(void)
         // ����Ƿ���ҪFFT������������ÿ10s�㲥һ�ν�������
         broadcast_other_task();
 
-        // UART1���Ͷ��д���（暂时禝用）
+        // UART1���Ͷ��д���
         uart1_tx_queue_process();
-
-        // ����UART AT���յ�����（暂时禝用）
-        // uart_at_process();
 
         // ����1s����
         param_update_1s_task();
@@ -2165,8 +2162,6 @@ static void param_update_1s_task(void)
         hmi_update_all_params();
 
         ml307r_task();
-
-        DEBUG_4G_PRINTF("  ml307r_task 1s end\r\n");
 
         // �ȼ��Ƶ���Ƿ��й���?
         if (sys_param.fault.bit.grid_frequency)

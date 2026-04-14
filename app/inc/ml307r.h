@@ -50,6 +50,98 @@ typedef struct {
 } signal_quality_t;
 
 /*============================================================================
+ ML307R AT协议错误码（来自 docs/错误码.md）
+============================================================================*/
+
+/* SSL 命令错误码（SSL用户手册 V5.4.5，第41页） */
+#define ML307R_SSL_ERR_PARAM                         (50)  // 参数错误
+#define ML307R_SSL_ERR_UNKNOWN                       (750) // SSL/TLS/DTLS 未知错误
+#define ML307R_SSL_ERR_INIT_RESOURCE                 (751) // SSL/TLS/DTLS 初始化资源错误
+#define ML307R_SSL_ERR_SERVER_CERT_VERIFY_FAIL       (752) // SSL/TLS/DTLS 服务器证书验证失败
+#define ML307R_SSL_ERR_NEGOTIATE_TIMEOUT             (753) // SSL/TLS/DTLS 协商超时
+#define ML307R_SSL_ERR_NEGOTIATE_FAIL                (754) // SSL/TLS/DTLS 协商失败
+#define ML307R_SSL_ERR_CERTKEY_UNKNOWN               (760) // CERTS/KEYS 未知错误
+#define ML307R_SSL_ERR_CERTKEY_INVALID               (761) // CERTS/KEYS 无效（格式/内容错误）
+#define ML307R_SSL_ERR_CERTKEY_NOT_EXIST             (762) // CERTS/KEYS 不存在
+#define ML307R_SSL_ERR_CERTKEY_ALREADY_EXIST         (763) // CERTS/KEYS 已存在同名的证书或密钥
+#define ML307R_SSL_ERR_CERTKEY_WRITE_FAIL            (764) // CERTS/KEYS 写入错误
+#define ML307R_SSL_ERR_CERTKEY_BUSY_WRITING          (765) // CERTS/KEYS 其他证书/密钥正在写入中
+#define ML307R_SSL_ERR_CERTKEY_READ_FAIL             (766) // CERTS/KEYS 读取错误
+#define ML307R_SSL_ERR_CERTKEY_DELETE_FAIL           (767) // CERTS/KEYS 删除错误
+#define ML307R_SSL_ERR_CERTKEY_TOO_LARGE             (768) // CERTS/KEYS 过大
+#define ML307R_SSL_ERR_CERTKEY_LOAD_FAIL             (769) // CERTS/KEYS 加载失败
+
+/* MQTT/MQTTS 命令错误码（MQTT用户手册 V6.8.5，第36页） */
+#define ML307R_MQTT_ERR_UNKNOWN                      (600) // 未知错误
+#define ML307R_MQTT_ERR_INVALID_PARAM                (601) // 无效参数
+#define ML307R_MQTT_ERR_NOT_CONNECTED_OR_CONN_FAIL   (602) // 未连接或连接失败
+#define ML307R_MQTT_ERR_CONNECTING                   (603) // 正在连接
+#define ML307R_MQTT_ERR_ALREADY_CONNECTED            (604) // 已经连接
+#define ML307R_MQTT_ERR_NETWORK                      (605) // 网络错误
+#define ML307R_MQTT_ERR_STORAGE                      (606) // 存储错误
+#define ML307R_MQTT_ERR_STATE                        (607) // 状态错误
+#define ML307R_MQTT_ERR_DNS                          (608) // DNS错误
+
+/* HTTP/HTTPS 命令错误码（HTTP_HTTPS用户手册 V6.1.4，第46页） */
+#define ML307R_HTTP_ERR_OPERATION_NOT_ALLOWED        (3)   // 操作不被允许
+#define ML307R_HTTP_ERR_MALLOC_FAIL                  (23)  // 内存分配失败
+#define ML307R_HTTP_ERR_PARAM                        (50)  // 参数错误
+#define ML307R_HTTP_ERR_UNKNOWN                      (650) // 未知错误
+#define ML307R_HTTP_ERR_NO_FREE_CLIENT               (651) // 无空闲客户端
+#define ML307R_HTTP_ERR_CLIENT_NOT_CREATED           (652) // 客户端未创建
+#define ML307R_HTTP_ERR_CLIENT_BUSY                  (653) // 客户端忙
+#define ML307R_HTTP_ERR_URL_PARSE_FAIL               (654) // URL解析失败
+#define ML307R_HTTP_ERR_SSL_NOT_ENABLED              (655) // SSL未使能
+#define ML307R_HTTP_ERR_CONNECT_FAIL                 (656) // 连接失败
+#define ML307R_HTTP_ERR_SEND_FAIL                    (657) // 数据发送失败
+#define ML307R_HTTP_ERR_OPEN_FILE_FAIL               (658) // 打开文件失败
+
+/* HTTP/HTTPS URC错误事件（+MHTTPURC: "err",<httpid>,<error_code>，第35页） */
+#define ML307R_HTTP_URC_ERR_DNS_RESOLVE_FAIL         (1)   // 域名解析失败
+#define ML307R_HTTP_URC_ERR_CONNECT_SERVER_FAIL      (2)   // 连接服务器失败
+#define ML307R_HTTP_URC_ERR_CONNECT_SERVER_TIMEOUT   (3)   // 连接服务器超时
+#define ML307R_HTTP_URC_ERR_SSL_HANDSHAKE_FAIL       (4)   // SSL握手失败
+#define ML307R_HTTP_URC_ERR_CONN_ABNORMAL_DISCONNECT (5)   // 连接异常断开
+#define ML307R_HTTP_URC_ERR_RESPONSE_TIMEOUT         (6)   // 请求响应超时
+#define ML307R_HTTP_URC_ERR_RECV_PARSE_FAIL          (7)   // 接收数据解析失败
+#define ML307R_HTTP_URC_ERR_CACHE_NOT_ENOUGH         (8)   // 缓存空间不足
+#define ML307R_HTTP_URC_ERR_PACKET_LOSS              (9)   // 数据丢包
+#define ML307R_HTTP_URC_ERR_WRITE_FILE_FAIL          (10)  // 写文件失败
+#define ML307R_HTTP_URC_ERR_UNKNOWN                  (255) // 未知错误
+
+/* TCP/UDP/DNS/PING 错误码（TCP_IP用户手册 V5.1.5，第71页） */
+#define ML307R_TCPIP_ERR_UNKNOWN                     (550) // TCP/IP 未知错误
+#define ML307R_TCPIP_ERR_NOT_USED                    (551) // TCP/IP 未被使用
+#define ML307R_TCPIP_ERR_ALREADY_USED                (552) // TCP/IP 已被使用
+#define ML307R_TCPIP_ERR_NOT_CONNECTED               (553) // TCP/IP 未连接
+#define ML307R_TCPIP_ERR_SOCKET_CREATE_FAIL          (554) // SOCKET 创建失败
+#define ML307R_TCPIP_ERR_SOCKET_BIND_FAIL            (555) // SOCKET 绑定失败
+#define ML307R_TCPIP_ERR_SOCKET_LISTEN_FAIL          (556) // SOCKET 监听失败
+#define ML307R_TCPIP_ERR_SOCKET_CONN_REFUSED         (557) // SOCKET 连接被拒绝
+#define ML307R_TCPIP_ERR_SOCKET_CONN_TIMEOUT         (558) // SOCKET 连接超时
+#define ML307R_TCPIP_ERR_SOCKET_CONN_FAIL            (559) // SOCKET 连接失败（其他异常）
+#define ML307R_TCPIP_ERR_SOCKET_WRITE_FAIL           (560) // SOCKET 写入异常
+#define ML307R_TCPIP_ERR_SOCKET_READ_FAIL            (561) // SOCKET 读取异常
+#define ML307R_TCPIP_ERR_SOCKET_ACCEPT_FAIL          (562) // SOCKET 接受异常
+#define ML307R_TCPIP_ERR_PDP_NOT_ACTIVATED           (570) // PDP 未激活
+#define ML307R_TCPIP_ERR_PDP_ACTIVATE_FAIL           (571) // PDP 激活失败
+#define ML307R_TCPIP_ERR_PDP_DEACTIVATE_FAIL         (572) // PDP 去激活失败
+#define ML307R_TCPIP_ERR_APN_NOT_CONFIGURED          (575) // APN 未配置
+#define ML307R_TCPIP_ERR_PORT_BUSY                   (576) // 端口忙碌
+#define ML307R_TCPIP_ERR_UNSUPPORTED_IPV4_IPV6       (577) // 不支持的IPV4/IPV6
+#define ML307R_TCPIP_ERR_DNS_PARSE_FAIL_OR_BAD_IP    (580) // DNS解析失败或错误的IP格式
+#define ML307R_TCPIP_ERR_DNS_BUSY                    (581) // DNS忙碌
+#define ML307R_TCPIP_ERR_PING_BUSY                   (582) // PING忙碌
+
+/* PING 结果码（+MPING: <result>，TCP_IP用户手册 V5.1.5，第56页） */
+#define ML307R_PING_RESULT_OK                        (0) // 成功
+#define ML307R_PING_RESULT_DNS_RESOLVE_FAIL          (1) // DNS 解析失败
+#define ML307R_PING_RESULT_DNS_RESOLVE_TIMEOUT       (2) // DNS 解析超时
+#define ML307R_PING_RESULT_RESPONSE_ERROR            (3) // 响应错误
+#define ML307R_PING_RESULT_RESPONSE_TIMEOUT          (4) // 响应超时
+#define ML307R_PING_RESULT_OTHER_ERROR               (5) // 其他错误
+
+/*============================================================================
  ML307R 4G模块基础接口
 ============================================================================*/
 

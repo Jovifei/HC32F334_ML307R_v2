@@ -40,6 +40,13 @@ void device_register_set_info(const char *product_id, const char *product_secret
                                const char *product_model, const char *device_sn);
 
 /**
+ * @brief 设置设备凭证（device_id/device_key）
+ * @param device_id 设备ID
+ * @param device_key 设备密钥
+ */
+void device_register_set_credentials(const char *device_id, const char *device_key);
+
+/**
  * @brief 发起设备注册请求（通过 ML307R HTTPS）
  * @param mark 标记字段（可选，传 NULL 或 ""）
  * @return 0=成功发起, -1=失败

@@ -6,7 +6,8 @@
       "Bash(python3 -c ':*)",
       "Bash(where uv4:*)",
       "Read(//c/Program Files/Keil/UV4/**)",
-      "Read(//c/Program Files \\(x86\\)/Keil/UV4/**)"
+      "Read(//c/Program Files \\(x86\\)/Keil/UV4/**)",
+      "Bash(python -c ':*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\lxxlx\\.claude"
