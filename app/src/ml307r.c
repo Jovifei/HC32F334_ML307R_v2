@@ -962,6 +962,7 @@ typedef enum {
     ML_SUB_CSQ,          // �׶�1: ��ѯ�ź�����
     ML_SUB_CEREG,        // �׶�1: �ȴ�����ע��
     ML_SUB_CEREG_WAIT,    // �׶�1: ���Լ���ȴ�?
+    ML_SUB_CEREG_DELAY,  // 阶段1: 注册未成功，等待3s后重新轮询
     ML_SUB_MIPCALL,       // 阶段1: 激活PDP
     ML_SUB_MIPCALL_DEACT, // 阶段1: 去激活PDP（CME ERROR 50后重试）
     ML_SUB_CERT_CA,       // �׶�2: д��CA֤��
@@ -1014,9 +1015,25 @@ static char s_reg_device_id[32];                  // 解析出的device_id
 static char s_reg_device_key[64];                 // 解析出的device_key
 static char s_json_body[256];                     // JSON body缓冲区（用于HTTPS注册）
 
+// CEREG重试延迟
+static uint32_t s_cereg_delay_start = 0;          // CEREG重试等待计时起点
+
 // MQTT重连状态
 static uint8_t s_mqtt_retry = 0;                  // MQTT连接重试次数（超限后全量重启）
 static uint32_t s_mqtt_urc_wait_start = 0;        // 等待MQTT conn URC的计时起点
+
+// 运行中发布状态机
+typedef enum {
+    RUN_IDLE,              // 空闲，等待下次发布时机
+    RUN_PUB_WAIT_PROMPT,   // 已发AT+MQTTPUB命令，等待 > 提示符
+    RUN_PUB_WAIT_OK,       // 已发payload，等待 OK 确认
+} run_pub_state_t;
+static run_pub_state_t s_run_pub_state = RUN_IDLE;
+static char s_run_payload[512];                    // 当前待发payload
+static int s_run_payload_len = 0;                  // payload字节长度
+static uint32_t s_run_pub_start = 0;               // 发布操作计时起点
+static uint32_t s_run_last_info_pub = 0;           // 上次设备信息发布时刻
+static uint32_t s_run_last_power_pub = 0;          // 上次CT功率发布时刻
 
 // 等待一段时间（毫秒，非阻塞�??
 // 返回1=等待结束, 0=还在等待
@@ -1289,7 +1306,6 @@ void ml307r_task(void)
                     at_command_start("AT+MIPCALL=1,1", 10000);
                     s_ml_sub_state = ML_SUB_MIPCALL;
                 } else {
-                    // 已注册命令OK但stat不合法，等待重试
                     s_cereg_retry++;
                     DEBUG_4G_PRINTF(" >>> CEREG stat=%d not registered, retry %d/30\r\n",
                                     s_cereg_stat, s_cereg_retry);
@@ -1297,10 +1313,8 @@ void ml307r_task(void)
                         DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                         s_ml_sub_state = ML_SUB_AT;
                     } else {
-                        s_wait_until = 0;
-                        if (ml_wait_ms(2000)) {
-                            s_ml_sub_state = ML_SUB_CEREG;
-                        }
+                        s_cereg_delay_start = SysTick_GetTick();
+                        s_ml_sub_state = ML_SUB_CEREG_DELAY;
                     }
                 }
             } else if (ret == AT_NB_ERR) {
@@ -1310,11 +1324,20 @@ void ml307r_task(void)
                     DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    s_wait_until = 0;
-                    if (ml_wait_ms(2000)) {
-                        s_ml_sub_state = ML_SUB_CEREG;
-                    }
+                    s_cereg_delay_start = SysTick_GetTick();
+                    s_ml_sub_state = ML_SUB_CEREG_DELAY;
                 }
+            }
+            break;
+
+        case ML_SUB_CEREG_DELAY:
+            // 等待3秒后重新发 AT+CEREG? 查询
+            // 调用at_command_check处理RX中的URC数据（忽略返回值，此时无命令等待）
+            at_command_check();
+            if ((SysTick_GetTick() - s_cereg_delay_start) >= 3000) {
+                DEBUG_4G_PRINTF(" >>> Retrying CEREG query...\r\n");
+                at_command_start("AT+CEREG?", 5000);
+                s_ml_sub_state = ML_SUB_CEREG_WAIT;
             }
             break;
 
@@ -1867,5 +1890,87 @@ void ml307r_task(void)
     }
 
     // ========== �������У����ڷ������� ==========
-    // TODO: ���ڷ��� MQTT publish
+    // TODO: ���ڷ��� MQTT publish (replaced below)
+
+    // ========== 运行中（初始化完成，发布数据 + 断开重连） ==========
+
+    // 检测 MQTT 断开 URC (+MQTTURC: "disc")
+    if (g_mqtt_disc_code >= 0) {
+        DEBUG_4G_PRINTF(" >>> MQTT disconnected (code=%d), reconnecting...\r\n", g_mqtt_disc_code);
+        g_mqtt_disc_code = -1;
+        s_run_pub_state = RUN_IDLE;
+        s_run_last_info_pub = 0;
+        s_run_last_power_pub = 0;
+        s_init_done = 0;
+        at_command_start("AT+MQTTCFG=\"ssl\",0,1,0", 3000);
+        s_ml_sub_state = ML_SUB_MQTT_CONN;
+        return;
+    }
+
+    // 发布状态机
+    if (s_run_pub_state == RUN_IDLE) {
+        const device_credentials_t *cred = device_register_get_credentials();
+        uint32_t now = SysTick_GetTick();
+        char pub_cmd[128];
+
+        // 设备信息上报（首次立即发，之后每60秒一次）
+        if (s_run_last_info_pub == 0 || (now - s_run_last_info_pub) >= 60000UL) {
+            s_run_payload_len = snprintf(s_run_payload, sizeof(s_run_payload),
+                "{\"id\":%d,\"method\":\"information\",\"params\":{"
+                "\"sn\":\"%s\",\"product_model\":\"%s\","
+                "\"mcu_version\":\"%s\",\"rssi\":-63}}",
+                s_mqtt_msg_id++, cred->device_sn, cred->product_model, SW_VERSION);
+            snprintf(pub_cmd, sizeof(pub_cmd),
+                "AT+MQTTPUB=0,\"up/%s/%s\",0,0,1,%d\r\n",
+                cred->product_id, cred->device_id, s_run_payload_len);
+            DEBUG_4G_PRINTF(" >>> [PUB] device_info: %s\r\n", s_run_payload);
+            at_flush_rx();
+            at_send_raw((const uint8_t *)pub_cmd, (uint16_t)strlen(pub_cmd));
+            s_run_pub_start = SysTick_GetTick();
+            s_run_pub_state = RUN_PUB_WAIT_PROMPT;
+            s_run_last_info_pub = now;
+
+        // CT功率上报（每5秒一次）
+        } else if (s_run_last_power_pub == 0 || (now - s_run_last_power_pub) >= 5000UL) {
+            s_run_payload_len = snprintf(s_run_payload, sizeof(s_run_payload),
+                "{\"id\":%d,\"method\":\"properties_changed\",\"params\":["
+                "{\"siid\":4,\"piid\":7,\"value\":%.1f},"
+                "{\"siid\":4,\"piid\":8,\"value\":%.1f}]}",
+                s_mqtt_msg_id++,
+                sys_param.ct1.power.avg_power,
+                sys_param.ct_today_energy);
+            snprintf(pub_cmd, sizeof(pub_cmd),
+                "AT+MQTTPUB=0,\"up/%s/%s\",0,0,1,%d\r\n",
+                cred->product_id, cred->device_id, s_run_payload_len);
+            DEBUG_4G_PRINTF(" >>> [PUB] ct_power: %s\r\n", s_run_payload);
+            at_flush_rx();
+            at_send_raw((const uint8_t *)pub_cmd, (uint16_t)strlen(pub_cmd));
+            s_run_pub_start = SysTick_GetTick();
+            s_run_pub_state = RUN_PUB_WAIT_PROMPT;
+            s_run_last_power_pub = now;
+        }
+
+    } else if (s_run_pub_state == RUN_PUB_WAIT_PROMPT) {
+        if (at_got_prompt()) {
+            at_send_raw((const uint8_t *)s_run_payload, (uint16_t)s_run_payload_len);
+            s_run_pub_start = SysTick_GetTick();
+            s_run_pub_state = RUN_PUB_WAIT_OK;
+        } else if ((SysTick_GetTick() - s_run_pub_start) >= 5000UL) {
+            DEBUG_4G_PRINTF(" !!! MQTT publish: no > in 5s\r\n");
+            s_run_pub_state = RUN_IDLE;
+        }
+
+    } else if (s_run_pub_state == RUN_PUB_WAIT_OK) {
+        int r = at_check_last_result();
+        if (r == 1) {
+            DEBUG_4G_PRINTF(" OK - MQTT publish done\r\n");
+            s_run_pub_state = RUN_IDLE;
+        } else if (r == -1) {
+            DEBUG_4G_PRINTF(" !!! MQTT publish ERROR\r\n");
+            s_run_pub_state = RUN_IDLE;
+        } else if ((SysTick_GetTick() - s_run_pub_start) >= 5000UL) {
+            DEBUG_4G_PRINTF(" !!! MQTT publish: no OK in 5s\r\n");
+            s_run_pub_state = RUN_IDLE;
+        }
+    }
 }

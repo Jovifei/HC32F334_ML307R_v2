@@ -247,6 +247,37 @@ static int32_t eeprom_i2c_read(uint16_t addr, uint8_t *data, uint32_t len)
 }
 
 /*---------------------------------------------------------------------------
+ Name        : int32_t eeprom_write_block(uint16_t addr, const uint8_t *data, uint16_t len)
+ Description : Write arbitrary-length data to EEPROM using correct HT24LC08 addressing.
+               Splits writes into E2P_PAGE_LEN (16-byte) chunks with 10ms delay each.
+---------------------------------------------------------------------------*/
+int32_t eeprom_write_block(uint16_t addr, const uint8_t *data, uint16_t len)
+{
+	uint16_t written = 0;
+	while (written < len)
+	{
+		uint16_t chunk = (uint16_t)(len - written);
+		if (chunk > E2P_PAGE_LEN)
+			chunk = E2P_PAGE_LEN;
+		int32_t ret = eeprom_i2c_write((uint16_t)(addr + written), data + written, chunk);
+		if (ret != LL_OK)
+			return ret;
+		delay_ms(10);
+		written = (uint16_t)(written + chunk);
+	}
+	return LL_OK;
+}
+
+/*---------------------------------------------------------------------------
+ Name        : int32_t eeprom_read_block(uint16_t addr, uint8_t *data, uint16_t len)
+ Description : Read arbitrary-length data from EEPROM using correct HT24LC08 addressing.
+---------------------------------------------------------------------------*/
+int32_t eeprom_read_block(uint16_t addr, uint8_t *data, uint16_t len)
+{
+	return eeprom_i2c_read(addr, data, len);
+}
+
+/*---------------------------------------------------------------------------
  Name        : static int eeprom_read_device_record(uint8_t index, eeprom_device_record_t *record)
  Input       : index: �豸����, record: ��¼ָ��
  Output      : 0: �ɹ�, -1: ��ȡʧ��, -2: CRCУ��ʧ��

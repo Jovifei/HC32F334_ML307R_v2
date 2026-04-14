@@ -71,10 +71,7 @@ static uint8_t cred_crc8(const uint8_t *data, uint16_t len)
 ---------------------------------------------------------------------------*/
 static int cred_read(uint16_t addr, uint8_t *data, uint16_t len)
 {
-    uint8_t reg[2];
-    reg[0] = (uint8_t)(addr >> 8);
-    reg[1] = (uint8_t)(addr & 0xFF);
-    return BSP_I2C_Read(CM_I2C, EEPROM_I2C_ADDR, reg, 2, data, len);
+    return eeprom_read_block(addr, data, len);
 }
 
 // ==================== 对外接口 ====================
@@ -371,17 +368,9 @@ bool device_register_save_to_flash(void)
     tmp.valid = 0x55;
     tmp.crc8 = cred_crc8((uint8_t*)&tmp, sizeof(tmp) - 1);
 
-    // ��ҳд(16�ֽ�/ҳ)
-    int pages = (sizeof(tmp) + 15) / 16;
-    for (int i = 0; i < pages; i++)
+    if (eeprom_write_block(CRED_ADDR, (uint8_t *)&tmp, (uint16_t)sizeof(tmp)) != LL_OK)
     {
-        uint16_t page_addr = CRED_ADDR + i * 16;
-        if (BSP_I2C_Write(CM_I2C, EEPROM_I2C_ADDR,
-                          (uint8_t[2]){(uint8_t)(page_addr >> 8), (uint8_t)page_addr},
-                          2, (uint8_t *)&tmp + i * 16, 16) != LL_OK)
-        {
-            return false;
-        }
+        return false;
     }
     return true;
 }

@@ -9,6 +9,9 @@
 // MQTT连接URC结果: -1=待定, 0=成功, 其他=失败码(服务器拒绝等)
 volatile int g_mqtt_conn_result = -1;
 
+// MQTT断开URC结果: -1=未断开, >=0=断开原因码
+volatile int g_mqtt_disc_code = -1;
+
 // MQTT 回调表
 typedef struct {
   mqtt_msg_callback_t cb;
@@ -48,6 +51,19 @@ static void mqtt_urc_handler(const char *line) {
       if (conn_id == MQTT_CONN_ID) {
         g_mqtt_conn_result = result_code;
       }
+    }
+    return;
+  }
+
+  // +MQTTURC: "disc",<conn_id>,<code> -> 连接断开通知
+  if (strstr(line, "+MQTTURC: \"disc\"") != NULL) {
+    int conn_id = -1, disc_code = 0;
+    if (sscanf(line, "+MQTTURC: \"disc\",%d,%d", &conn_id, &disc_code) >= 1) {
+      if (conn_id == MQTT_CONN_ID) {
+        g_mqtt_disc_code = disc_code;
+      }
+    } else {
+      g_mqtt_disc_code = 0;
     }
     return;
   }
