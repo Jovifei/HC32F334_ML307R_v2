@@ -123,16 +123,41 @@ void iot_mqtt_downlink_handler(const char *topic, const char *payload) {
     }
 }
 
+// 构造properties_changed JSON
+// 格式: {"id":123,"method":"properties_changed","params":[{"siid":2,"piid":1,"value":0},...]}
+static char* iot_build_properties_changed_json(void) {
+    // 返回一个示例JSON，实际属性填充后续完善
+    static char json[512];
+    snprintf(json, sizeof(json),
+        "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[]}",
+        (int)sys_param.current_time_ms);
+    return json;
+}
+
+static void iot_publish_properties_changed(const char *json) {
+    if (json) {
+        ml307r_mqtt_publish("up", json, 1);
+    }
+}
+
 void iot_report_immediate(uint8_t inv_idx) {
     (void)inv_idx;
+    char *json = iot_build_properties_changed_json();
+    if (json && strlen(json) > 10) {
+        iot_publish_properties_changed(json);
+    }
 }
 
 void iot_report_bind(const char *sn) {
-    (void)sn;
+    if (!sn) return;
+    snprintf(s_report_bind_sn, sizeof(s_report_bind_sn), "%s", sn);
+    iot_tx_flag.immediate_report_bind = 1;
 }
 
 void iot_report_unbind(const char *sn) {
-    (void)sn;
+    if (!sn) return;
+    snprintf(s_report_bind_sn, sizeof(s_report_bind_sn), "%s", sn);
+    iot_tx_flag.immediate_report_unbind = 1;
 }
 
 void iot_trigger_ct_report(void) {
