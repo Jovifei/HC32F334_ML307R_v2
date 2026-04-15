@@ -932,6 +932,8 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
 {
     (void)topic;
     // If it is a down topic, invoke downlink callback
+    // Note: s_mqtt_downlink_cb (iot_mqtt_downlink_handler) handles get_properties,
+    // set_properties, and action - no direct handling needed here
     if (strstr(topic, "down") != NULL && s_mqtt_downlink_cb != NULL)
     {
         s_mqtt_downlink_cb(topic, payload);
@@ -961,15 +963,7 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
     int msg_id = parse_msg_id(buf);
     DEBUG_4G_PRINTF("[MQTT] method=%s, msg_id=%d\r\n", method, msg_id);
 
-    if (strcmp(method, "get_properties") == 0)
-    {
-      handle_get_properties(buf, msg_id);
-    }
-    else if (strcmp(method, "set_properties") == 0)
-    {
-      handle_set_properties(buf, msg_id);
-    }
-    else if (strcmp(method, "time") == 0)
+    if (strcmp(method, "time") == 0)
     {
       handle_time_sync(buf);
     }

@@ -844,8 +844,7 @@ static void iot_publish_properties_changed(const char *json) {
 }
 
 void iot_report_immediate(uint8_t inv_idx) {
-    (void)inv_idx;
-    char *json = iot_build_properties_changed_json();
+    char *json = iot_build_inv_properties_changed_json(inv_idx);
     if (json && strlen(json) > 10) {
         iot_publish_properties_changed(json);
     }
@@ -869,7 +868,25 @@ static char* iot_build_properties_json_with_idx(uint8_t inv_idx) {
 }
 
 void iot_trigger_ct_report(void) {
-    char *json = iot_build_properties_changed_json();
+    static uint8_t s_ct_siid_toggle = 0;
+    uint8_t siid = (s_ct_siid_toggle == 0) ? 2 : 3;
+    s_ct_siid_toggle = (s_ct_siid_toggle + 1) % 2;
+
+    char *json;
+    if (siid == 2) {
+        json = iot_build_properties_changed_json();
+    } else {
+        // Build siid=3 properties
+        static char siid3_json[1024];
+        char params[512] = {0};
+        int pos = 0;
+        iot_build_ct_siid3_json(params, sizeof(params), &pos);
+        snprintf(siid3_json, sizeof(siid3_json),
+            "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[%s]}",
+            (int)sys_param.current_time_ms, params);
+        json = siid3_json;
+    }
+
     if (json && strlen(json) > 10) {
         iot_publish_properties_changed(json);
     }
@@ -912,28 +929,20 @@ void iot_task(void) {
         iot_publish_properties_changed(s_iot_json_buf);
     }
 
-    // 3. 定时计数器递增 (假设100ms调用一次)
-    static uint32_t s_timer_tick = 0;
-    s_timer_tick += 100;
-
-    // 4. CT设备定时上报(5分钟)
-    if (s_timer_tick >= 100) {
-        iot_tx_flag.prop_ct_count += 100;
-        if (iot_tx_flag.prop_ct_count >= PROP_CT_MS_INTERVAL) {
-            iot_tx_flag.prop_ct_count = 0;
-            iot_trigger_ct_report();
-        }
+    // 3. CT设备定时上报(5分钟)
+    iot_tx_flag.prop_ct_count += 100;
+    if (iot_tx_flag.prop_ct_count >= PROP_CT_MS_INTERVAL) {
+        iot_tx_flag.prop_ct_count = 0;
+        iot_trigger_ct_report();
     }
 
-    // 5. INV设备定时上报(3分钟)
-    if (s_timer_tick >= 100) {
-        iot_tx_flag.prop_inv_count += 100;
-        if (iot_tx_flag.prop_inv_count >= PROP_INV_MS_INTERVAL) {
-            iot_tx_flag.prop_inv_count = 0;
-            for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++) {
-                if (sys_param.paired_inv_info[i].is_valid) {
-                    iot_trigger_inverter_report(i);
-                }
+    // 4. INV设备定时上报(3分钟)
+    iot_tx_flag.prop_inv_count += 100;
+    if (iot_tx_flag.prop_inv_count >= PROP_INV_MS_INTERVAL) {
+        iot_tx_flag.prop_inv_count = 0;
+        for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++) {
+            if (sys_param.paired_inv_info[i].is_valid) {
+                iot_trigger_inverter_report(i);
             }
         }
     }
