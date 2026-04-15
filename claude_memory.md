@@ -17,6 +17,62 @@
 
 ---
 
+## IoT模块架构 (iot.c/iot.h)
+
+ESP32 WiFi模块已替换为ML307R 4G模块，新增IoT抽象层：
+
+### 核心文件
+
+| 文件 | 职责 |
+|------|------|
+| `app/inc/iot.h` | IoT模块头文件，接口声明 |
+| `app/src/iot.c` | IoT模块实现 (~940行) |
+| `app/src/ml307r.c` | ML307R状态机 + MQTT回调集成 |
+
+### 主要接口
+
+```c
+void iot_task(void);                           // 主任务（MQTT连接后调用）
+void iot_mqtt_downlink_handler(topic, payload); // MQTT下行回调
+void iot_report_immediate(uint8_t inv_idx);    // INV立即属性上报
+void iot_report_bind(const char *sn);          // 配对绑定上报
+void iot_report_unbind(const char *sn);        // 解绑上报
+void iot_trigger_ct_report(void);              // CT定时上报触发
+void iot_trigger_inverter_report(uint8_t inv_idx); // INV定时上报触发
+bool iot_is_connected(void);                   // 获取连接状态
+```
+
+### MQTT通信
+
+- **下行**: 订阅 `down` 主题，JSON格式消息通过回调处理
+- **上行**: 发布到 `up` 主题，JSON格式
+
+```json
+// 上报属性 (properties_changed)
+{"id":123,"method":"properties_changed","params":[{"siid":2,"piid":1,"value":0},...]}
+
+// 下行命令
+{"id":123,"method":"get_properties","params":[{"siid":1,"piid":2},...]}
+```
+
+### 上报策略
+
+| 类型 | 触发条件 | 目标 |
+|------|----------|------|
+| 即时上报 | INV状态/告警变化 | properties_changed |
+| CT定时上报 | 5分钟周期 | siid=2, siid=3 交替 |
+| INV定时上报 | 3分钟周期 | siid=4~11 |
+
+### ml307r.h 新增接口
+
+```c
+typedef void (*mqtt_downlink_cb)(const char *topic, const char *payload);
+void ml307r_mqtt_set_downlink_callback(mqtt_downlink_cb cb);
+bool ml307r_mqtt_is_connected(void);
+```
+
+---
+
 ## 状态机架构 (ml307r_task)
 
 采用**非阻塞状态机** + **两步AT命令模式**：
@@ -140,6 +196,11 @@ DEBUG_4G_PRINTF(" RX(%d)=[%s]\r\n", n, dbg_buf);
 - ✅ Phase 7: MQTT订阅
 - ✅ 设备凭证EEPROM持久化
 - ✅ URC回调机制
+- ✅ **IoT抽象层 (iot.c/iot.h)**: MQTT通信抽象，替代ESP32 WiFi
+- ✅ **properties_changed上报**: CT设备5分钟周期，INV设备3分钟周期
+- ✅ **set_properties处理**: 解析JSON，设置sys_param参数
+- ✅ **get_properties处理**: 解析JSON，查询属性值并响应
+- ✅ **ML307R MQTT回调机制**: 下行消息通过回调分发
 
 ### 待验证
 
@@ -172,6 +233,23 @@ DEBUG_4G_PRINTF(" RX(%d)=[%s]\r\n", n, dbg_buf);
 5. **AT+MSSLCERTWR命令格式**: `AT+MSSLCERTWR="<filename>",0,<length>` (无SSL上下文ID参数)
 6. **ML307R特定**: 使用 `AT+MHTTPCREATE/MHTTPCFG/MHTTPCONTENT/MHTTPREQUEST` 而非标准HTTP命令
 
+## DMIOT协议参考
+
+协议文档位置: `PDF/DMIOT模组串口指令.docx`, `PDF/DMIOT模组MQTT通信协议.docx`
+
+**关键区别 - 串口协议 vs MQTT协议**:
+- 串口: `get_down` 轮询文本命令，`properties_changed 2 1 0\r`
+- MQTT: 订阅 `down` 主题接收JSON，发布JSON到 `up` 主题
+
+**JSON格式示例**:
+```json
+// 上报 properties_changed
+{"id":123,"method":"properties_changed","params":[{"siid":2,"piid":1,"value":0}]}
+
+// 响应 result
+{"id":123,"method":"result","params":[{"siid":1,"piid":2,"value":10,"code":0}]}
+```
+
 ---
 
 ## 文件位置
@@ -180,14 +258,29 @@ DEBUG_4G_PRINTF(" RX(%d)=[%s]\r\n", n, dbg_buf);
 d:\work\ML307R_F334\
 ├── app/
 │   ├── inc/
-│   │   ├── ml307r.h        # 状态机类型定义
+│   │   ├── ml307r.h        # 状态机类型定义 + MQTT回调接口
+│   │   ├── iot.h           # IoT模块头文件 (新增)
 │   │   ├── config.h        # 产品配置宏
 │   │   └── device_register.h
 │   └── src/
-│       ├── ml307r.c        # 1674行，主状态机
+│       ├── ml307r.c        # 主状态机 + MQTT回调集成
+│       ├── iot.c           # IoT模块实现 (新增，~940行)
 │       ├── uart_at.c       # AT命令收发、URC管理
 │       ├── device_register.c # 凭证管理、EEPROM读写
 │       └── at_parser.c     # MQTT命令封装
+├── docs/superpowers/
+│   ├── specs/2026-04-14-iot-ml307r-design.md  # 设计文档
+│   └── plans/2026-04-14-iot-ml307r-implementation.md # 实现计划
 ├── MDK/                    # Keil工程
 └── docs/ML307R_串口调试操作步骤.docx  # AT命令文档
 ```
+
+## Git提交记录
+
+主要commits:
+- `720f30c` fix(ml307r): remove duplicate get/set_properties handling
+- `391cbf3` chore: delete obsolete wifi.c and wifi.h files
+- `59287a5` feat(iot): complete iot.c full property logic
+- `8c2ca55` feat(iot): integrate iot_task with ml307r MQTT connection
+- `1054ab4` feat(ml307r): implement MQTT callback mechanism
+- `6a58ebd` feat(iot): add IoT module header with MQTT interface declarations
