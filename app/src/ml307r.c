@@ -458,8 +458,15 @@ int ml307r_mqtt_disconnect(void)
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_publish(const char *topic, const char *payload, int qos)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_publish: topic=%s, qos=%d, payload=%s\r\n", topic, qos, payload);
-    int ret = at_mqtt_publish(topic, qos, payload, (int)strlen(payload));
+    // 短名映射："up" → s_topic_up, "down" → s_topic_down
+    const char *real_topic = topic;
+    if (topic != NULL && strcmp(topic, "up") == 0 && s_topic_up[0] != '\0')
+        real_topic = s_topic_up;
+    else if (topic != NULL && strcmp(topic, "down") == 0 && s_topic_down[0] != '\0')
+        real_topic = s_topic_down;
+
+    DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_publish: topic=%s, qos=%d\r\n", real_topic, qos);
+    int ret = at_mqtt_publish(real_topic, qos, payload, (int)strlen(payload));
     DEBUG_4G_PRINTF("[MQTT] <<< ml307r_mqtt_publish ret=%d\r\n", ret);
     return ret;
 }
@@ -474,6 +481,17 @@ mqtt_state_t ml307r_mqtt_get_state(void)
 {
     DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_get_state: %d\r\n", s_mqtt_state);
     return s_mqtt_state;
+}
+
+/*---------------------------------------------------------------------------
+ Name        : bool ml307r_mqtt_is_connected(void)
+ Input       : 无
+ Output      : true=已连接且订阅完成, false=未连接
+ Description : 供外部模块（iot.c等）查询MQTT是否处于可发布状态。
+---------------------------------------------------------------------------*/
+bool ml307r_mqtt_is_connected(void)
+{
+    return (s_init_done && s_mqtt_state == MQTT_STATE_CONNECTED);
 }
 
 // ==================== 上行消息发布 ====================
@@ -939,6 +957,7 @@ typedef enum {
     ML_SUB_CSQ,          // 阶段1: 查询信号强度
     ML_SUB_CEREG,        // 阶段1: 等待网络注册
     ML_SUB_CEREG_WAIT,    // 阶段1: 循环检测等待
+    ML_SUB_CEREG_DELAY,  // 阶段1: 重试等待延时(3s)
     ML_SUB_MIPCALL,       // 阶段1: 激活PDP
     ML_SUB_MIPCALL_DEACT, // 阶段1: 去激活PDP（CME ERROR 50后重试）
     ML_SUB_CERT_CA,       // 阶段2: 写入CA证书
@@ -978,6 +997,7 @@ static ml_sub_state_t s_ml_sub_state = ML_SUB_AT;
 static uint32_t s_wait_until = 0;
 static uint8_t s_init_done = 0;
 static uint8_t s_cereg_retry = 0;
+static uint32_t s_cereg_delay_start = 0;   // ML_SUB_CEREG_DELAY 独立计时起点
 static int s_cereg_stat = -1;              // +CEREG: <n>,<stat> 中的 stat 字段（1=home, 5=roaming）
 static cert_step_t s_cert_step = CERT_STEP_CMD;  // 证书写入步骤
 static uint32_t s_cert_wait_start = 0;            // 证书等待计时起点
@@ -1274,10 +1294,8 @@ void ml307r_task(void)
                         DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                         s_ml_sub_state = ML_SUB_AT;
                     } else {
-                        s_wait_until = 0;
-                        if (ml_wait_ms(2000)) {
-                            s_ml_sub_state = ML_SUB_CEREG;
-                        }
+                        s_cereg_delay_start = SysTick_GetTick();
+                        s_ml_sub_state = ML_SUB_CEREG_DELAY;
                     }
                 }
             } else if (ret == AT_NB_ERR) {
@@ -1287,11 +1305,18 @@ void ml307r_task(void)
                     DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    s_wait_until = 0;
-                    if (ml_wait_ms(2000)) {
-                        s_ml_sub_state = ML_SUB_CEREG;
-                    }
+                    s_cereg_delay_start = SysTick_GetTick();
+                    s_ml_sub_state = ML_SUB_CEREG_DELAY;
                 }
+            }
+            break;
+
+        case ML_SUB_CEREG_DELAY:
+            at_command_check();
+            if ((SysTick_GetTick() - s_cereg_delay_start) >= 3000) {
+                DEBUG_4G_PRINTF(" >>> Retrying CEREG query...\r\n");
+                at_command_start("AT+CEREG?", 5000);
+                s_ml_sub_state = ML_SUB_CEREG_WAIT;
             }
             break;
 
@@ -1769,12 +1794,14 @@ void ml307r_task(void)
             at_command_check();
 
             if (g_mqtt_conn_result == 0) {
-                // 连接成功，发起订阅
+                // 连接成功，构造topic并发起订阅
                 const device_credentials_t *cred = device_register_get_credentials();
+                snprintf(s_topic_up,   sizeof(s_topic_up),   "up/%s/%s",   PRODUCT_ID, cred->device_id);
+                snprintf(s_topic_down, sizeof(s_topic_down), "down/%s/%s", PRODUCT_ID, cred->device_id);
+                s_mqtt_state = MQTT_STATE_CONNECTED;
                 char sub_cmd[128];
                 snprintf(sub_cmd, sizeof(sub_cmd),
-                    "AT+MQTTSUB=0,\"down/%s/%s\",0",
-                    PRODUCT_ID, cred->device_id);
+                    "AT+MQTTSUB=0,\"%s\",0", s_topic_down);
                 DEBUG_4G_PRINTF(" >>> [13] MQTT connected, subscribe: %s\r\n", sub_cmd);
                 s_mqtt_retry = 0;  // 连接成功，重置重试计数
                 at_command_start(sub_cmd, 5000);
@@ -1843,6 +1870,17 @@ void ml307r_task(void)
         return;
     }
 
-    // ========== 正常运行中，用于发布消息 ==========
-    // TODO: 用于发送 MQTT publish
+    // ========== 正常运行中：检测断连并自动重连 ==========
+    at_command_check(); // 持续处理RX，触发URC回调
+
+    if (g_mqtt_disc_code >= 0) {
+        // 收到断连URC
+        DEBUG_4G_PRINTF("[ML307R] !!! MQTT disconnected (disc_code=%d), reconnecting...\r\n",
+                        g_mqtt_disc_code);
+        g_mqtt_disc_code = -1;      // 清除标志
+        s_mqtt_state = MQTT_STATE_DISCONNECTED;
+        s_mqtt_retry = 0;
+        s_init_done = 0;
+        s_ml_sub_state = ML_SUB_MQTT_CONN; // 直接重连，跳过证书/注册
+    }
 }

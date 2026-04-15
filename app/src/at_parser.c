@@ -4,10 +4,15 @@
 #include <stdio.h>
 #include <string.h>
 
+extern uint32_t SysTick_GetTick(void);
+
 #define MQTT_CONN_ID 0
 
 // MQTT连接URC结果: -1=待定, 0=成功, 其他=失败码(服务器拒绝等)
 volatile int g_mqtt_conn_result = -1;
+
+// MQTT断连URC结果: -1=未触发, 0+=断连码
+volatile int g_mqtt_disc_code = -1;
 
 // MQTT 回调表
 typedef struct {
@@ -47,6 +52,17 @@ static void mqtt_urc_handler(const char *line) {
       if (conn_id == MQTT_CONN_ID) {
         g_mqtt_conn_result = result_code;
       }
+    }
+    return;
+  }
+
+  // +MQTTURC: "disc",<conn_id>,<code> -> 断连通知
+  if (strstr(line, "+MQTTURC: \"disc\"") != NULL) {
+    int conn_id = -1, disc_code = 0;
+    if (sscanf(line, "+MQTTURC: \"disc\",%d,%d", &conn_id, &disc_code) >= 1) {
+      if (conn_id == MQTT_CONN_ID) g_mqtt_disc_code = disc_code;
+    } else {
+      g_mqtt_disc_code = 0;
     }
     return;
   }
@@ -155,10 +171,46 @@ int at_mqtt_publish(const char *topic, int qos, const char *data,
                     int data_len) {
   if (data == NULL || data_len <= 0)
     return -2;
-  char cmd[512], resp[256];
-  snprintf(cmd, sizeof(cmd), "AT+MQTTPUB=%d,\"%s\",%d,0,0,%d,\"%s\"",
-           MQTT_CONN_ID, topic, qos, data_len, data);
-  return at_send_command(cmd, "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
+
+  // 使用encoding=1数据模式：先发命令头，等待>，再发payload，等待OK
+  // 避免payload中包含引号导致模组解析失败
+  char cmd[256];
+  int cmd_len = snprintf(cmd, sizeof(cmd) - 2,
+                         "AT+MQTTPUB=%d,\"%s\",%d,0,1,%d",
+                         MQTT_CONN_ID, topic, qos, data_len);
+  cmd[cmd_len++] = '\r';
+  cmd[cmd_len++] = '\n';
+
+  at_flush_rx();
+  at_send_raw((const uint8_t *)cmd, (uint16_t)cmd_len);
+
+  // 等待 > 提示符（5s超时）
+  uint32_t start = SysTick_GetTick();
+  bool got_prompt = false;
+  while ((SysTick_GetTick() - start) < 5000) {
+    uart_at_process();
+    if (at_got_prompt()) {
+      got_prompt = true;
+      break;
+    }
+  }
+  if (!got_prompt)
+    return -1;
+
+  // 发送payload数据
+  at_send_raw((const uint8_t *)data, (uint16_t)data_len);
+
+  // 等待 OK（5s超时）
+  start = SysTick_GetTick();
+  while ((SysTick_GetTick() - start) < 5000) {
+    uart_at_process();
+    int r = at_check_last_result();
+    if (r == 1)
+      return 0;
+    if (r == -1)
+      return -1;
+  }
+  return -1;
 }
 
 /*---------------------------------------------------------------------------

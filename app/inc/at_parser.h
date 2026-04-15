@@ -26,6 +26,13 @@ typedef void (*mqtt_msg_callback_t)(const char *topic, const char *payload, int 
  */
 extern volatile int g_mqtt_conn_result;
 
+/**
+ * MQTT断连URC结果（由 mqtt_urc_handler 在收到 +MQTTURC: "disc" 时设置）
+ * -1 = 未触发
+ * >=0 = 断连码
+ */
+extern volatile int g_mqtt_disc_code;
+
 /*============================================================================
  MQTT AT命令封装
 ============================================================================*/

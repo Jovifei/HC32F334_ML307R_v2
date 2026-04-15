@@ -212,6 +212,12 @@ int ml307r_mqtt_publish(const char *topic, const char *payload, int qos);
  */
 mqtt_state_t ml307r_mqtt_get_state(void);
 
+/**
+ * 查询MQTT是否处于已连接且可发布状态
+ * @return true=可发布, false=未连接
+ */
+bool ml307r_mqtt_is_connected(void);
+
 /*============================================================================
  主任务接口
 ============================================================================*/
