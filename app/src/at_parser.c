@@ -82,9 +82,8 @@ static void mqtt_urc_handler(const char *line) {
     // 提取topic: 跳过"publish",conn_id,qos后找第四个引号内容
     const char *t = line + strlen(pub_prefix) + 1;
     t = strchr(t, ','); if (t) t = strchr(t + 1, ',');
-    if (t) t = strchr(t + 1, ',');
     if (!t) return;
-    t++; // 跳过最后一个逗号，到达topic引号
+    t++; // 跳过qos后的逗号，到达topic开头引号
     const char *topic_end = strchr(t + 1, '"');
     if (!topic_end) return;
     size_t topic_len = (size_t)(topic_end - t - 1);
@@ -122,7 +121,7 @@ static void mqtt_urc_handler(const char *line) {
   }
 
   // +MQTTURC: "message","<topic>",<qos>,<len>,"<data>" -> 下行消息(旧格式)
-  const char *prefix = "+MQTTURC: \"message\"";
+  const char *prefix = "+MQTTURC: \"message\",\"";
   if (strncmp(line, prefix, strlen(prefix)) == 0) {
     char topic[128] = {0};
     char payload[512] = {0};
@@ -136,6 +135,7 @@ static void mqtt_urc_handler(const char *line) {
         }
       }
     }
+    return;
   }
 }
 

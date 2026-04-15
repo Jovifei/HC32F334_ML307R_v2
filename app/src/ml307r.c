@@ -3,6 +3,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "device_register.h"
+#include "iot.h"
 #include "main.h"
 #include "uart_at.h"
 #include <stdio.h>
@@ -926,13 +927,9 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
     int msg_id = parse_msg_id(buf);
     DEBUG_4G_PRINTF("[MQTT] method=%s, msg_id=%d\r\n", method, msg_id);
 
-    if (strcmp(method, "get_properties") == 0)
+    if (strcmp(method, "get_properties") == 0 || strcmp(method, "set_properties") == 0)
     {
-      handle_get_properties(buf, msg_id);
-    }
-    else if (strcmp(method, "set_properties") == 0)
-    {
-      handle_set_properties(buf, msg_id);
+      iot_mqtt_downlink_handler(topic, buf);
     }
     else if (strcmp(method, "time") == 0)
     {

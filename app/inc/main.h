@@ -7,6 +7,13 @@
 #include <stdbool.h>
 
 
+#define COMM_MODULE_VERSION "ESP32_C3"
+
+#define PRODUCT_ID "689adc659f04ec32f7642fbb"
+#define PRODUCT_MODEL "GC-CTST3C"
+#define PRODUCT_SECRET "e8127Lx3dG9l3Hy7"
+
+
 #define BOARDCAST_TIME 2 // 广播时间间隔，单位：电网周期数（2个周期后广播，50Hz=40ms，60Hz=33ms）
 
 // #define DEBUG_ENABLE // 调试功能开关，0为关闭，1为开启

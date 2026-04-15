@@ -60,8 +60,8 @@ static int iot_json_parse_method(const char *payload, char *method, int method_l
     strncpy(method, method_start, method_copy_len);
     method[method_copy_len] = '\0';
 
-    // 查找 "id":
-    p = strstr(p, "\"id\":");
+    // 查找 "id": 从头部搜索，因为id可能在method之前
+    p = strstr(payload, "\"id\":");
     if (p == NULL) {
         return -1;
     }
@@ -213,8 +213,44 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
     }
     // CT设备 SIID=1 (设备信息)
     else if (siid == 1) {
-        (void)piid;
-        return -4003; // property not found (no device_info in current sys_param_t)
+        switch (piid) {
+        case 1:
+            snprintf(str_val, sizeof(str_val), "%s", "CT_3C");
+            is_string = true;
+            break;
+        case 2:
+            snprintf(str_val, sizeof(str_val), "%s", "PRODUCT_SN");
+            is_string = true;
+            break;
+        case 3:
+            snprintf(str_val, sizeof(str_val), "%s", "PRODUCT_SN");
+            is_string = true;
+            break;
+        case 4:
+            snprintf(str_val, sizeof(str_val), "%s", SW_VERSION);
+            is_string = true;
+            break;
+        case 5:
+            snprintf(str_val, sizeof(str_val), "%s", HW_VERSION);
+            is_string = true;
+            break;
+        case 6:
+            i_val = sys_param.wifi.restore_wifi_cmd;
+            break;
+        case 8:
+            snprintf(str_val, sizeof(str_val), "%s", sys_param.sub1g.sw_version);
+            is_string = true;
+            break;
+        case 9: {
+            static char addr_str[7];
+            snprintf(addr_str, sizeof(addr_str), "%06X", sys_param.sub1g.ct_sub1g_addr);
+            snprintf(str_val, sizeof(str_val), "%s", addr_str);
+            is_string = true;
+            break;
+        }
+        default:
+            return -4003;
+        }
     }
     // CT设备 SIID=2 (设备功率)
     else if (siid == 2) {
@@ -793,6 +829,7 @@ static char* iot_build_properties_changed_json(void) {
     return json;
 }
 
+// 能不能不使用指针函数，改为简单的函数实现。
 // 构造指定INV设备的properties_changed JSON
 static char* iot_build_inv_properties_changed_json(uint8_t inv_idx) {
     static char json[1024];
