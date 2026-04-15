@@ -13,6 +13,7 @@
 #include "eeprom.h"
 #include "ota_max.h"
 #include "fft.h"
+#include "iot.h"
 #include "uart_at.h"
 #include <stdint.h>
 #include "ml307r.h"
@@ -149,6 +150,7 @@ int main(void)
 
         // 检查并处理LED状态控制
         // mmi_task();
+        fault_detection_task();
 
         // 检查并处理调试串行任务
         debug_task();
@@ -179,6 +181,15 @@ int main(void)
 
         // ML307R 4G模组任务（非阻塞状态机，每次主循环执行）
         ml307r_task();
+
+        // IoT任务（100ms周期，非阻塞定时）
+        {
+            static uint32_t s_iot_last_tick = 0;
+            if ((SysTick_GetTick() - s_iot_last_tick) >= 100) {
+                s_iot_last_tick = SysTick_GetTick();
+                iot_task();
+            }
+        }
 
         // sub1g数据接收处理
         sub1g_rx_task();

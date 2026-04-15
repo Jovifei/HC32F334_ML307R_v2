@@ -72,7 +72,56 @@ static void mqtt_urc_handler(const char *line) {
     return;
   }
 
-  // +MQTTURC: "message","<topic>",<qos>,<len>,"<data>"
+  // +MQTTURC: "publish",<conn_id>,<qos>,"<topic>",<len>,<len>,{<json>} -> 下行消息(ML307R格式)
+  // 例如: +MQTTURC: "publish",0,0,"down/xxx",267,267,{...}
+  const char *pub_prefix = "+MQTTURC: \"publish\"";
+  if (strncmp(line, pub_prefix, strlen(pub_prefix)) == 0) {
+    char topic[128] = {0};
+    char payload[512] = {0};
+
+    // 提取topic: 跳过"publish",conn_id,qos后找第四个引号内容
+    const char *t = line + strlen(pub_prefix) + 1;
+    t = strchr(t, ','); if (t) t = strchr(t + 1, ',');
+    if (t) t = strchr(t + 1, ',');
+    if (!t) return;
+    t++; // 跳过最后一个逗号，到达topic引号
+    const char *topic_end = strchr(t + 1, '"');
+    if (!topic_end) return;
+    size_t topic_len = (size_t)(topic_end - t - 1);
+    if (topic_len >= sizeof(topic)) topic_len = sizeof(topic) - 1;
+    strncpy(topic, t + 1, topic_len);
+    topic[topic_len] = '\0';
+
+    // 提取payload: 找第一个{开始，配对}结束
+    const char *json_start = topic_end + 1;
+    while (*json_start && *json_start != '{') json_start++;
+    if (!*json_start) return;
+
+    const char *json_end = json_start;
+    int brace_depth = 0;
+    while (*json_end) {
+      if (*json_end == '{') brace_depth++;
+      else if (*json_end == '}') {
+        brace_depth--;
+        if (brace_depth == 0) { json_end++; break; }
+      }
+      json_end++;
+    }
+
+    int actual_len = (int)(json_end - json_start);
+    if (actual_len >= (int)sizeof(payload)) actual_len = sizeof(payload) - 1;
+    strncpy(payload, json_start, actual_len);
+    payload[actual_len] = '\0';
+
+    for (int i = 0; i < MQTT_CB_MAX; i++) {
+      if (s_mqtt_cbs[i].used && s_mqtt_cbs[i].cb != NULL) {
+        s_mqtt_cbs[i].cb(topic, payload, actual_len);
+      }
+    }
+    return;
+  }
+
+  // +MQTTURC: "message","<topic>",<qos>,<len>,"<data>" -> 下行消息(旧格式)
   const char *prefix = "+MQTTURC: \"message\"";
   if (strncmp(line, prefix, strlen(prefix)) == 0) {
     char topic[128] = {0};
