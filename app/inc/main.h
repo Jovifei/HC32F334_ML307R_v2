@@ -26,7 +26,7 @@
 #define DEBUG_4G_ENABLE
 
 #ifdef DEBUG_4G_ENABLE
-#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R] " fmt, ##__VA_ARGS__)
+#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R]" fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_4G_PRINTF(fmt, ...) ((void)0)
 #endif
@@ -130,7 +130,7 @@
 #define SWITCH_INV_BOARCAST 1                      // 同一个微逆广播几次，切换到下一个微逆
 
 // ================= 避免UART1串口的冲突定义环形缓存区 =================
-#define UART1_TX_QUEUE_SIZE 6
+#define UART1_TX_QUEUE_SIZE 2
 #define UART1_TX_MSG_MAX_LEN 100
 
 // 微逆设备属性PIID定义

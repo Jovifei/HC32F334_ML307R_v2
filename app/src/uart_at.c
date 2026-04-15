@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-// SysTick 计数器（�? hc32_ll_utility.c 提供，不依赖 ADC 中断�?
+// SysTick 计数器（由 hc32_ll_utility.c 提供，不依赖 ADC 中断）
 extern uint32_t SysTick_GetTick(void);
 
 #define UART_AT_RX_BUF_SIZE 1024
@@ -14,19 +14,19 @@ extern uint32_t SysTick_GetTick(void);
 
 static uint8_t s_rx_buf[1024];
 static volatile uint16_t s_rx_head =
-    0;                         // 写指针（中断写入�???
-static uint16_t s_rx_tail = 0; // 读指针（任务读取�???
+    0;                         // 写指针（中断写入）
+static uint16_t s_rx_tail = 0; // 读指针（任务读取）
 
-// 命令结果: 0=等待�???, 1=OK, -1=ERROR, -1=超时
+// 命令结果: 0=等待, 1=OK, -1=ERROR, -1=超时
 static volatile int8_t s_cmd_result = 0;
 
 // RX数据就绪标志（中断设置，主循环清除）
 static volatile bool s_rx_data_ready = false;
 
-// 提示符标志：parse_rx_lines_budget 遇到 > 时设置，供证书写入状态机检�?
+// 提示符标志：parse_rx_lines_budget 遇到 > 时设置，供证书写入状态机检测
 static volatile bool s_got_prompt = false;
 
-// 写入完成标志：handle_parsed_line 处理�? OK/ERROR 时设�?
+// 写入完成标志：handle_parsed_line 处理 OK/ERROR 时设置
 static volatile bool s_got_ok  = false;
 static volatile bool s_got_err = false;
 
@@ -49,7 +49,7 @@ static char s_last_error_line[32] = {0};
 
 // ==================== 内部函数 ====================
 
-// 前向声明（ISR 在函数定义之前调�??? parse_rx_lines�???
+// 前向声明（ISR 在函数定义之前调用 parse_rx_lines）
 static void parse_rx_lines_budget(uint16_t max_bytes);
 
 static void handle_parsed_line(const char *line)
@@ -59,7 +59,7 @@ static void handle_parsed_line(const char *line)
         return;
     }
 
-    // 调试：打印收到的每一�?
+    // 调试：打印收到的每一行
     DEBUG_4G_PRINTF("[UART_AT] RX: [%s]\r\n", line);
 
     if (s_cmd_result == 0)
@@ -87,7 +87,7 @@ static void handle_parsed_line(const char *line)
         }
     }
 
-    // 检�??? URC
+    // 检测 URC
     for (size_t j = 0; j < sizeof(s_urc_tbl) / sizeof(s_urc_tbl[0]); j++)
     {
         if (s_urc_tbl[j].used && strstr(line, s_urc_tbl[j].keyword) != NULL)
@@ -101,7 +101,7 @@ static void handle_parsed_line(const char *line)
     }
 }
 
-// USART2 中断服务程序（ML307R 4G模组�?
+// USART2 中断服务程序（ML307R 4G模组）
 void USART2_Handler(void)
 {
     if (USART_GetStatus(CM_USART2, USART_FLAG_RX_FULL))
@@ -125,7 +125,7 @@ void USART2_Handler(void)
     USART_ClearStatus(CM_USART2, USART_FLAG_ALL);
 }
 
-// Ԥ��ʽ������ÿ���������? max_bytes ���ֽڣ�������ѭ��һ�γԿյ��¿���
+// 分段预解析，每次最多处理 max_bytes 个字节，防止在主循环一次吃空新数据
 static void parse_rx_lines_budget(uint16_t max_bytes)
 {
     uint16_t processed = 0;
@@ -149,7 +149,7 @@ static void parse_rx_lines_budget(uint16_t max_bytes)
         if (s_line_len < (sizeof(s_line_buf) - 1))
         {
             s_line_buf[s_line_len++] = (char)ch;
-            // '>' 作为行首第一个字�? = 模组的输入提示符，立刻标�?
+            // '>' 作为行首第一个字符 = 模组的输入提示符，立刻标记
             if (ch == '>' && s_line_len == 1)
             {
                 s_got_prompt = true;
@@ -157,7 +157,7 @@ static void parse_rx_lines_budget(uint16_t max_bytes)
         }
         else
         {
-            // �й��������ֶ���ֱ���������У��������?
+            // 行溢出，超长行直接丢弃，不影响正常数据
         }
     }
 }
@@ -173,7 +173,7 @@ void uart_at_init(void)
     s_line_len = 0;
     memset(s_urc_tbl, 0, sizeof(s_urc_tbl));
 
-    // 使能 USART2 RX 中断和超时中�?
+    // 使能 USART2 RX 中断和超时中断
     NVIC_ClearPendingIRQ(USART2_IRQn);
     NVIC_SetPriority(USART2_IRQn, DDL_IRQ_PRIO_13);
     NVIC_EnableIRQ(USART2_IRQn);
@@ -191,7 +191,7 @@ int at_send_command(const char *cmd, const char *expected_ok,
 
     at_flush_rx();
 
-    // 发�? AT 命令（自动加 \r\n�???
+    // 发送 AT 命令（自动加 \r\n）
     char cmd_buf[320];
     snprintf(cmd_buf, sizeof(cmd_buf), "%s\r\n", cmd);
 
@@ -202,10 +202,10 @@ int at_send_command(const char *cmd, const char *expected_ok,
             ;
         USART_WriteData(CM_USART2, (uint16_t)cmd_buf[i]);
     }
-    // 等待 TX 完全发送完�?
+    // 等待 TX 完全发送完毕
     while (USART_GetStatus(CM_USART2, USART_FLAG_TX_CPLT) == RESET)
         ;
-    // TX发送完成后在主循环打印调试信息（不在中断上下文�?
+    // TX发送完成后在主循环打印调试信息（不在中断上下文）
     // DEBUG_4G_PRINTF(" UART_AT: TX %d bytes complete\r\n", len);
 
     // 等待响应（改进的非阻塞轮询）
@@ -221,7 +221,7 @@ int at_send_command(const char *cmd, const char *expected_ok,
             parse_rx_lines_budget(64);
         }
 
-        // 超时检查（使用 SysTick 计数器，不依�? ADC 中断�?
+        // 超时检查（使用 SysTick 计数器，不依赖 ADC 中断）
         if ((SysTick_GetTick() - start) >= timeout_ms)
         {
             s_cmd_result = -1; // 超时
@@ -295,13 +295,13 @@ void uart_at_process(void)
         // 解析 RX 数据
         parse_rx_lines_budget(64);
 
-        // 只有缓冲区空了才清标志，否则保留让下次继续处�?
+        // 只有缓冲区空了才清标志，否则保留让下次继续处理
         if (s_rx_head == s_rx_tail)
             s_rx_data_ready = false;
     }
 }
 
-// ==================== 非阻�? AT 命令接口 ====================
+// ==================== 非阻塞 AT 命令接口 ====================
 
 static at_nb_state_t s_nb_state = AT_NB_IDLE;
 static uint32_t s_nb_start = 0;
@@ -313,7 +313,7 @@ int at_command_start(const char *cmd, uint32_t timeout_ms)
         return -1;
 
     if (s_nb_state == AT_NB_WAITING)
-        return 0; // 还在等待上一�?
+        return 0; // 还在等待上一条
 
     at_flush_rx();
     char cmd_buf[320];
@@ -339,7 +339,7 @@ int at_command_check(void)
     if (s_nb_state == AT_NB_IDLE)
         return AT_NB_IDLE;
 
-    // 检查AT响应结果（由 handle_parsed_line 设置�?
+    // 检查AT响应结果（由 handle_parsed_line 设置）
     if (s_cmd_result == 1)
     {
         s_nb_state = AT_NB_OK;
@@ -360,7 +360,7 @@ int at_command_check(void)
         parse_rx_lines_budget(64);
     }
 
-    // 检查超�?
+    // 检查超时
     if ((SysTick_GetTick() - s_nb_start) >= s_nb_timeout)
     {
         s_nb_state = AT_NB_ERR;
@@ -386,15 +386,15 @@ int at_read_response(char *buf, int len)
     return copied;
 }
 
-// 检查RX缓冲区是否包含指定字符串（用于检�?>提示符等�?
-// 返回1=包含, 0=不包�?
+// 检查RX缓冲区是否包含指定字符串（用于检测>提示符等）
+// 返回1=包含, 0=不包含
 int at_rx_contains(const char *str)
 {
     if (str == NULL || *str == '\0')
         return 0;
     int str_len = (int)strlen(str);
 
-    // 从s_rx_tail到s_rx_head逐字符检�?
+    // 从s_rx_tail到s_rx_head逐字符检索
     uint16_t idx = s_rx_tail;
     int matched = 0;
     while (idx != s_rx_head)
@@ -416,11 +416,11 @@ int at_rx_contains(const char *str)
     return 0;
 }
 
-// ==================== 提示�? / 写入完成 检�? API ====================
+// ==================== 提示符 / 写入完成 检测 API ====================
 
 /**
- * 检查是否收�? > 提示符（自动清除�?
- * �? parse_rx_lines_budget 在检测到 > 为行首字符时设置
+ * 检查是否收到 > 提示符（自动清除标志）
+ * 由 parse_rx_lines_budget 在检测到 > 为行首字符时设置
  */
 bool at_got_prompt(void)
 {
@@ -430,7 +430,7 @@ bool at_got_prompt(void)
 }
 
 /**
- * 检查最近一次写入结果（自动清除�?
+ * 检查最近一次写入结果（自动清除标志）
  * @return 1=OK, -1=ERROR/CME ERROR, 0=尚未收到
  */
 int at_check_last_result(void)

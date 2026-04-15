@@ -16,7 +16,7 @@
         <TargetCommonOption>
           <Device>HC32F334JATI</Device>
           <Vendor>HDSC</Vendor>
-          <PackID>HDSC.HC32F334.1.1.0</PackID>
+          <PackID>HDSC.HC32F334.1.0.0</PackID>
           <PackURL>https://raw.githubusercontent.com/hdscmcu/pack/master/</PackURL>
           <Cpu>IROM1(0x0,0x20000) IROM2(0x3000000,0x1800) IRAM1(0x1FFFC000,0x8000) IRAM2(0x200F0000,0x1000) CPUTYPE("Cortex-M4") FPU2 CLOCK(8000000) ESEL ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
@@ -587,6 +587,11 @@
               <FileType>1</FileType>
               <FilePath>..\app\src\uart_at.c</FilePath>
             </File>
+            <File>
+              <FileName>iot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\app\src\iot.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -604,7 +609,7 @@
         <TargetCommonOption>
           <Device>HC32F334JATI</Device>
           <Vendor>HDSC</Vendor>
-          <PackID>HDSC.HC32F334.1.1.0</PackID>
+          <PackID>HDSC.HC32F334.1.0.0</PackID>
           <PackURL>https://raw.githubusercontent.com/hdscmcu/pack/master/</PackURL>
           <Cpu>IROM1(0x0,0x20000) IROM2(0x3000000,0x1800) IRAM1(0x1FFFC000,0x8000) IRAM2(0x200F0000,0x1000) CPUTYPE("Cortex-M4") FPU2 CLOCK(8000000) ESEL ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
@@ -1174,6 +1179,11 @@
               <FileName>uart_at.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\app\src\uart_at.c</FilePath>
+            </File>
+            <File>
+              <FileName>iot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\app\src\iot.c</FilePath>
             </File>
           </Files>
         </Group>
