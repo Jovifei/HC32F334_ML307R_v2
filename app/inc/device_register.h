@@ -25,18 +25,25 @@ typedef struct {
 } device_credentials_t;
 
 /**
- * @brief 初始化设备注册模块
+ * @brief 设备注册模块全局状态（只读使用）
  */
-void device_register_init(void);
+extern device_credentials_t g_device_cred;
+extern device_reg_state_t g_device_reg_state;
 
 /**
- * @brief 设置设备信息（从配置或MCU获取）
+ * @brief 启动阶段初始化并加载已保存的凭证
+ * @param product_id 产品ID
+ * @param product_secret 产品密钥
+ * @param product_model 产品型号
+ * @param device_sn 设备序列号
+ *
+ * 说明：该函数会清空内部状态、写入基础信息，并尝试从EEPROM加载 device_id/device_key。
  * @param product_id 产品ID
  * @param product_secret 产品密钥
  * @param product_model 产品型号
  * @param device_sn 设备序列号
  */
-void device_register_set_info(const char *product_id, const char *product_secret,
+void device_register_bootstrap(const char *product_id, const char *product_secret,
                                const char *product_model, const char *device_sn);
 
 /**
@@ -52,18 +59,6 @@ void device_register_set_credentials(const char *device_id, const char *device_k
  * @return 0=成功发起, -1=失败
  */
 int device_register_request(const char *mark);
-
-/**
- * @brief 获取注册状态
- * @return device_reg_state_t
- */
-device_reg_state_t device_register_get_state(void);
-
-/**
- * @brief 获取设备凭据
- * @return device_credentials_t 指针
- */
-const device_credentials_t* device_register_get_credentials(void);
 
 /**
  * @brief 从 Flash 加载已保存的凭据

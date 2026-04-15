@@ -104,7 +104,9 @@ int main(void)
     // 初始化三通道FFT模块
     fft_3ch_init();
 
+    // eeprom_write_sn("GTEST1000000011");
     // run_eeprom_tests();
+
     int ret = eeprom_init_and_load_devices();
     if (ret == 0)
     {
@@ -124,7 +126,7 @@ int main(void)
         printf(" EEPROM init failed!\n");
     }
 
-    printf("\r\n CT SW_Version %s", SW_VERSION);
+    printf(" CT SW_Version %s", SW_VERSION);
     printf("\r\n CT HW_Version %s\r\n", HW_VERSION);
 
     printf("================ Start Normal Run ================ \r\n");

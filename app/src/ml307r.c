@@ -380,7 +380,7 @@ int ml307r_mqtt_connect(void)
     DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_connect start\r\n");
 
     // 获取设备凭证
-    const device_credentials_t *cred = device_register_get_credentials();
+    const device_credentials_t *cred = &g_device_cred;
     if (!cred->registered)
     {
       DEBUG_4G_PRINTF("[MQTT] !!! Device not registered !!!\r\n");
@@ -491,7 +491,7 @@ mqtt_state_t ml307r_mqtt_get_state(void)
 ---------------------------------------------------------------------------*/
 bool ml307r_mqtt_is_connected(void)
 {
-    return (s_init_done && s_mqtt_state == MQTT_STATE_CONNECTED);
+    return (ml307r_mqtt_get_state() == MQTT_STATE_CONNECTED);
 }
 
 // ==================== 上行消息发布 ====================
@@ -510,7 +510,7 @@ static int s_mqtt_msg_id = 0;
 ---------------------------------------------------------------------------*/
 static void publish_device_info(void)
 {
-    const device_credentials_t *cred = device_register_get_credentials();
+    const device_credentials_t *cred = &g_device_cred;
     char payload[128];
     snprintf(payload, sizeof(payload),
              "{\"id\":%d,\"method\":\"information\",\"params\":{"
@@ -1005,7 +1005,6 @@ static uint32_t s_cert_wait_start = 0;            // 证书等待计时起点
 // HTTPS注册状态机用静态变量
 static uint8_t s_https_reg_done = 0;              // HTTPS注册完成标志(device_id/key已解析)
 static uint8_t s_urc_registered = 0;              // URC回调已注册标志
-static uint8_t s_dev_reg_init = 0;                // device_register模块已初始化标志
 static uint32_t s_https_body_len = 0;             // JSON body字节长度
 static char s_reg_device_id[32];                  // 解析出的device_id
 static char s_reg_device_key[64];                 // 解析出的device_key
@@ -1204,14 +1203,6 @@ void ml307r_task(void)
             at_register_urc("+CEREG:", cereg_urc_callback);     // 网络注册状态捕获
             at_mqtt_register_callback(on_mqtt_message);          // MQTT URC + 消息回调
             s_urc_registered = 1;
-        }
-
-        // 初始化一次 device_register 模块
-        if (!s_dev_reg_init) {
-            device_register_init();
-            device_register_set_info(PRODUCT_ID, PRODUCT_SECRET, PRODUCT_MODEL, PRODUCT_SN);
-            device_register_load_from_flash();
-            s_dev_reg_init = 1;
         }
 
         switch (s_ml_sub_state)
@@ -1516,8 +1507,8 @@ void ml307r_task(void)
         case ML_SUB_HTTPS_CHECK:
         {
             // 检查 EEPROM 中是否已有有效凭证（已在启动时加载）
-            if (device_register_get_state() == DEVICE_REG_SUCCESS) {
-                const device_credentials_t *cred = device_register_get_credentials();
+            if (g_device_reg_state == DEVICE_REG_SUCCESS) {
+                const device_credentials_t *cred = &g_device_cred;
                 DEBUG_4G_PRINTF(" OK - Already registered, skip HTTPS\r\n");
                 DEBUG_4G_PRINTF("     device_id=%s\r\n", cred->device_id);
                 s_ml_sub_state = ML_SUB_SSL_AUTH;
@@ -1715,7 +1706,7 @@ void ml307r_task(void)
 
         case ML_SUB_MQTT_CONN:
         {
-            const device_credentials_t *cred = device_register_get_credentials();
+            const device_credentials_t *cred = &g_device_cred;
             // 等待 MQTTSSL 命令完成
             ret = at_command_check();
             if (ret == AT_NB_IDLE)
@@ -1743,7 +1734,7 @@ void ml307r_task(void)
 
         case ML_SUB_MQTT_CONN_WAIT2:
         {
-            const device_credentials_t *cred = device_register_get_credentials();
+            const device_credentials_t *cred = &g_device_cred;
             ret = at_command_check();
             if (ret == AT_NB_IDLE)
                 break;
@@ -1795,7 +1786,7 @@ void ml307r_task(void)
 
             if (g_mqtt_conn_result == 0) {
                 // 连接成功，构造topic并发起订阅
-                const device_credentials_t *cred = device_register_get_credentials();
+                const device_credentials_t *cred = &g_device_cred;
                 snprintf(s_topic_up,   sizeof(s_topic_up),   "up/%s/%s",   PRODUCT_ID, cred->device_id);
                 snprintf(s_topic_down, sizeof(s_topic_down), "down/%s/%s", PRODUCT_ID, cred->device_id);
                 s_mqtt_state = MQTT_STATE_CONNECTED;

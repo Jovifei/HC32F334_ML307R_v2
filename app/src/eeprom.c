@@ -8,6 +8,8 @@
 #include "grid.h"
 #include "string.h"
 #include "stdio.h"
+#include "device_register.h"
+#include "config.h"
 
 /**
  * @brief  BSP I2C write.
@@ -502,16 +504,16 @@ int eeprom_init_and_load_devices(void)
 	int consumption_ret = eeprom_load_set_param();
 	if (consumption_ret == 0)
 	{
-		printf("\n1.EEPROM���ò���\n");
-		printf(" ��������               | ����ֵ\n");
+		printf("\n1. EEPROM config\n");
+		printf(" Parameter              | Value\n");
 		printf(" -----------------------|--------------\n");
-		printf(" ������������           | %d\n", sys_param.to_grid_power_limit);
-		printf(" ���ʹ���ģʽ           | %d\n", sys_param.power_work_mode);
-		printf(" ����������             | %d\n", sys_param.anti_backflow_switch);
-		printf(" CT����(sequence_k)     | %d\n", sys_param.grid.phase_id.sequence_k);
-		printf(" CT1����                | %d\n", (int)(sys_param.ct1.power.power_direction));
-		printf(" CT2����                | %d\n", (int)(sys_param.ct2.power.power_direction));
-		printf(" CT3����                | %d\n", (int)(sys_param.ct3.power.power_direction));
+		printf(" Grid power limit        | %d\n", sys_param.to_grid_power_limit);
+		printf(" Power work mode         | %d\n", sys_param.power_work_mode);
+		printf(" Anti-backflow switch    | %d\n", sys_param.anti_backflow_switch);
+		printf(" CT mapping (sequence_k) | %d\n", sys_param.grid.phase_id.sequence_k);
+		printf(" CT1 direction           | %d\n", (int)(sys_param.ct1.power.power_direction));
+		printf(" CT2 direction           | %d\n", (int)(sys_param.ct2.power.power_direction));
+		printf(" CT3 direction           | %d\n", (int)(sys_param.ct3.power.power_direction));
 	}
 	else if (consumption_ret == -2)
 	{
@@ -529,7 +531,7 @@ int eeprom_init_and_load_devices(void)
 		// ��������Ч�����ԴӾ�������Ǩ�ƣ��������ݣ�
 		eeprom_migrate_elec_consumption();
 	}
-	printf(" �õ���Wh               | %u\n", sys_param.hmi.electricity_consumption);
+	printf(" Energy (Wh)             | %u\n", sys_param.hmi.electricity_consumption);
 	printf("=======================================\n");
 
 	return 0;
@@ -1222,8 +1224,8 @@ int eeprom_clear_user_pair_list(void)
 ---------------------------------------------------------------------------*/
 void print_device_list(void)
 {
-	printf("\r\n2.΢���Ѿ�����б���ʾ\r\n");
-	printf("  ���� | SIID | sub1g��ַ(3B) | EEPROM��ַ��Χ | �豸SN           | ��Ʒ�ͺ�  | ����CTx����\n");
+	printf("\r\n2. Paired inverter list\r\n");
+	printf("  Slot | SIID | SUB1G addr(3B) | EEPROM addr range | Device SN         | Model     | Phase/CT\n");
 	printf("  -----|------|---------------|----------------|------------------|-----------|------------\n");
 	for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++)
 	{
@@ -1245,8 +1247,8 @@ void print_device_list(void)
 		}
 	}
 	printf("\n=======================================");
-	printf("\r\n3.�û�����б���ʾ\r\n");
-	printf(" ���� | EEPROM��ַ��Χ | �豸SN  \n");
+	printf("\r\n3. User pair list\r\n");
+	printf(" Slot | EEPROM addr range     | Device SN\n");
 	printf(" ------|------------------|------------------\n");
 	for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++)
 	{
@@ -1260,18 +1262,21 @@ void print_device_list(void)
 		}
 	}
 	printf("\n=======================================\n");
+	
+	device_register_bootstrap(PRODUCT_ID, PRODUCT_SECRET, PRODUCT_MODEL, PRODUCT_SN);
+
 	// ��ȡCT��SN
 	char sn_buffer[16];
 	if (eeprom_read_sn(sn_buffer) == 0) // SN��ȡ�ɹ�
 	{
 		sys_param.flash_sn_com_normal = true;
-		printf(" CT SN: %s", wifi_info.sn);
+		printf(" CT SN: %s\r\n", wifi_info.sn);
 	}
 	else // SN��ȡʧ��
 	{
 		sys_param.flash_sn_com_normal = false;
 		memset(wifi_info.sn, 0, sizeof(wifi_info.sn));
-		printf(" CT SN: Not Writen (use MAC address)");
+		printf(" CT SN: Not Writen (use MAC address)\r\n");
 	}
 }
 
@@ -1635,13 +1640,20 @@ int eeprom_read_sn(char *sn)
 
 	if (ret != LL_OK)
 	{
+		printf(" EEPROM read SN failed: %d\r\n", ret);
 		return -1;
 	}
 
 	if (record.valid != EEPROM_RECORD_VALID)
 	{
+		printf(" EEPROM read SN valid failed: %d\r\n", record.valid);
 		return -1;
 	}
+
+	// record.device_sn is fixed-length (15 bytes) and may not be '\0' terminated.
+	char sn_print[SN_LENGTH + 1];
+	memcpy(sn_print, record.device_sn, SN_LENGTH);
+	sn_print[SN_LENGTH] = '\0';
 
 	// ����SN�������������15�ֽڣ�
 	memcpy(sn, record.device_sn, SN_LENGTH);
