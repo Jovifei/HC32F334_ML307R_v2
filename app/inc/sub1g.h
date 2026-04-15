@@ -11,9 +11,9 @@
 #define SUB1G_FRAME_HEADER 0xFACE                      // 帧头
 #define SUB1G_MIN_FRAME_SIZE 7                         // 最小帧长度（帧头2B + 地址3B + 长度1B + 命令码1B）
 #define SUB1G_MAX_FRAME_SIZE (SUB1G_MAX_DATA_SIZE + 8) // 最大帧长度
-#define SUB1G_MAX_DATA_SIZE 128                        // 最大数据内容长度
+#define SUB1G_MAX_DATA_SIZE 50                        // 最大数据内容长度
 
-#define DEVICE_LIST_BUFFER_SIZE 200 // 设备列表缓冲区，为了后台可以读取到已绑定列表和待配对列表
+#define DEVICE_LIST_BUFFER_SIZE 50 // 设备列表缓冲区，为了后台可以读取到已绑定列表和待配对列表
 
 // ================= 命令码定义 =================
 typedef enum

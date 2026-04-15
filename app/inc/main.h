@@ -110,7 +110,7 @@
 #define INV_REPORT_51_SIZE 20  // 51数据上报最大长度
 
 // ================= 连接多sub1g设备 =================
-#define INV_DEVICE_MAX_NUM 2                      // 最大设备数量
+#define INV_DEVICE_MAX_NUM 8                      // 最大设备数量
 #define USER_PAIR_LIST_MAX_NUM INV_DEVICE_MAX_NUM // 用户配对列表最大数量
 #define PRODUCT_MODEL_MAX_LEN 10                  // 产品型号最大长度
 

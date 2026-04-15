@@ -10,7 +10,7 @@
 
 #include "main.h"
 
-#define MSG_DATA_MAX_LEN 100 // 内存不够，暂定512改为400
+#define MSG_DATA_MAX_LEN 10 // 内存不够，暂定512改为400
 
 typedef struct
 {
