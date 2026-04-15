@@ -10,16 +10,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// ==================== �豸ƾ�� ====================
+// ==================== 设备凭证 ====================
 
 static device_credentials_t s_cred = {0};
 static device_reg_state_t s_state = DEVICE_REG_IDLE;
 
-// ƾ�ݴ洢��ַ(SN��֮��EEPROM_ELEC_BASE_ADDR+16=0x1A0)
+// 凭证存储地址(SN等之后EEPROM_ELEC_BASE_ADDR+16=0x1A0)
 #define CRED_ADDR  0x1A0
-#define CRED_LEN   192  // 12�?
+#define CRED_LEN   192  // 12页
 
-// EEPROM ƾ�ݽṹ(192�ֽ�)
+// EEPROM 凭证结构(192字节)
 typedef struct __attribute__((packed))
 {
     char product_id[32];
@@ -33,14 +33,13 @@ typedef struct __attribute__((packed))
 } cred_store_t;
 
 /*---------------------------------------------------------------------------
- Name        : cred_crc8
- Input       : data - ��������ָ��
-               len  - �������ϳ���(�ֽ�)
- Output      : CRC8У��ֵ
- Description :
- ����ƾ�ڽṹ��CRC8У��ֵ(����ʽ 0x07)��
- ����У�� `cred_store_t` ��EEPROM�е����������ԡ�
- ע�⣺��算法的实现位于 `eeprom.c` �е�CRC8����һ�£�����ᵲ�ص�У��ʧ�ܡ�
+ Name        : static uint8_t cred_crc8(const uint8_t *data, uint16_t len)
+ Input       : data - 数据缓冲区指针
+               len  - 数据块长度(字节)
+ Output      : CRC8校验值
+ Description : 计算凭证结构体的CRC8校验值（多项式 0x07）。
+               用于校验 cred_store_t 在EEPROM中的数据完整性。
+               注意：算法的实现位于 eeprom.c 中的CRC8保持一致，否则会造成校验失败。
 ---------------------------------------------------------------------------*/
 static uint8_t cred_crc8(const uint8_t *data, uint16_t len)
 {
@@ -60,29 +59,30 @@ static uint8_t cred_crc8(const uint8_t *data, uint16_t len)
 }
 
 /*---------------------------------------------------------------------------
- Name        : cred_read
- Input       : addr - EEPROM��ʼ��ַ(16λ)
-               data - ��ȡ������
-               len  - ��ȡ����(�ֽ�)
- Output      : BSP_I2C_Read �ķ���ֵ(LL_OK=�ɹ�������=ʧ��)
- Description :
- ��EEPROM��ȡ���ⳤ�����ϡ�
- �ú�����װI2C�����̣���д��2�ֽڵ�ַ���ٶ�ȡ���ϡ�
+ Name        : static int cred_read(uint16_t addr, uint8_t *data, uint16_t len)
+ Input       : addr - EEPROM起始地址(16位)
+               data - 读取目标缓冲区
+               len  - 读取长度(字节)
+ Output      : BSP_I2C_Read 的返回值(LL_OK=成功，其他=失败)
+ Description : 从EEPROM读取任意长度的数据块。
+               该函数封装I2C读取流程：先写2字节地址，再读取数据块。
 ---------------------------------------------------------------------------*/
 static int cred_read(uint16_t addr, uint8_t *data, uint16_t len)
 {
-    return eeprom_read_block(addr, data, len);
+    uint8_t reg[2];
+    reg[0] = (uint8_t)(addr >> 8);
+    reg[1] = (uint8_t)(addr & 0xFF);
+    return BSP_I2C_Read(CM_I2C, EEPROM_I2C_ADDR, reg, 2, data, len);
 }
 
 // ==================== 对外接口 ====================
 
 /*---------------------------------------------------------------------------
- Name        : device_register_init
- Input       : ��
- Output      : ��
- Description :
- ��ʼ���豸ע��ģ����ڲ�״̬��
- ��� `s_cred`������ע��״̬��Ϊ `DEVICE_REG_IDLE`��
+ Name        : void device_register_init(void)
+ Input       : 无
+ Output      : 无
+ Description : 初始化设备注册模块的内部状态。
+               清空 s_cred，将注册状态置为 DEVICE_REG_IDLE。
 ---------------------------------------------------------------------------*/
 void device_register_init(void)
 {
@@ -91,17 +91,17 @@ void device_register_init(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : device_register_set_info
- Input       : product_id     - ��ƷID�ַ���
-               product_secret - ��Ʒ��Կ�ַ���
-               product_model  - ��Ʒ�ͺ��ַ���
-               device_sn      - �豸���к��ַ���
- Output      : ��
- Description :
- �����豸ע������Ļ�����Ϣ��д�뵽ȫ��ƾ�� `s_cred`��
- ˵����
- - �����������ΪNULL��ΪNULL���Ӧ�ֶβ��ֲ��䡣
- - ÿ���ֶ��ڲ�ʹ�� `strncpy(..., 31)`��ȷ������дԽ�磬���ϲ���Ӧ��֤�ַ�����\0��β��
+ Name        : void device_register_set_info(const char *product_id, const char *product_secret,
+               const char *product_model, const char *device_sn)
+ Input       : product_id     - 产品ID字符串
+               product_secret - 产品密钥字符串
+               product_model  - 产品型号字符串
+               device_sn      - 设备序列号字符串
+ Output      : 无
+ Description : 设置设备注册所需的基础信息，写入到全局凭证 s_cred 中。
+               说明：
+               - 各参数若为NULL，对应字段不赋值不影响。
+               - 每个字段内部使用 strncpy(..., 31)，确保不发生写越界，上层也应保证字符串\0结尾。
 ---------------------------------------------------------------------------*/
 void device_register_set_info(const char *product_id, const char *product_secret,
                                const char *product_model, const char *device_sn)
@@ -139,26 +139,25 @@ void device_register_set_credentials(const char *device_id, const char *device_k
 }
 
 /*---------------------------------------------------------------------------
- Name        : device_register_request
- Input       : mark - ��ע�ֶ�(��ѡ)�����ڷ����������Դ/���Σ���ΪNULL
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- �����豸ע��(���ƶ����� device_id / device_key)��
- ���̸�����
- - У�� `s_cred.product_id/product_secret/device_sn` �Ƿ�������
- - ���� prov_code = MD5(product_secret + device_sn) (�� `crypto.c/md5_encrypt_code`)
- - ͨ��ģ��AT������HTTP(S)���̣�
-   1) `AT+HTTPINIT`
-   2) `AT+HTTPPARA="URL",...`
-   3) `AT+HTTPPARA="CONTENT","application/json"`
-   4) `AT+HTTPDATA=<len>,10000` -> �ȴ� DOWNLOAD
-   5) `at_send_raw()` д�� JSON body
-   6) `AT+HTTPACTION=1` ����POST
-   7) `AT+HTTPREAD` ��ȡ��Ӧ������ device_id/device_key
-   8) `AT+HTTPTERM` ����HTTP���̣��
- ʧ��������
- - AT����ʧ��/��ʱ
- - �������Ӧ�޷������� device_id/device_key
+ Name        : int device_register_request(const char *mark)
+ Input       : mark - 备注字段（可选），用于标识注册来源/标签，为NULL则为空字符串
+ Output      : 0=成功, -1=失败
+ Description : 发起设备注册（获取平台颁发的 device_id / device_key）。
+               流程：
+               - 校验 s_cred.product_id/product_secret/device_sn 是否不为空
+               - 计算 prov_code = MD5(product_secret + device_sn)（见 crypto.c/md5_encrypt_code）
+               - 通过模组AT命令执行HTTP(S)流程：
+                 1) AT+HTTPINIT
+                 2) AT+HTTPPARA="URL",...
+                 3) AT+HTTPPARA="CONTENT","application/json"
+                 4) AT+HTTPDATA=<len>,10000 -> 等待 DOWNLOAD
+                 5) at_send_raw() 写入 JSON body
+                 6) AT+HTTPACTION=1 发送POST
+                 7) AT+HTTPREAD 读取响应并解析 device_id/device_key
+                 8) AT+HTTPTERM 关闭HTTP流程
+               失败情形：
+               - AT命令失败/超时
+               - 服务器响应无法解析出 device_id/device_key
 ---------------------------------------------------------------------------*/
 int device_register_request(const char *mark)
 {
@@ -233,7 +232,7 @@ int device_register_request(const char *mark)
 
     DEBUG_4G_PRINTF("HTTP response: %s\n", resp);
 
-    // ���� {"code":0,"data":{"device_id":"xxx","device_key":"yyy"}}
+    // 解析 {"code":0,"data":{"device_id":"xxx","device_key":"yyy"}}
     id_start = strstr(resp, "\"device_id\":\"");
     key_start = strstr(resp, "\"device_key\":\"");
 
@@ -274,11 +273,10 @@ cleanup:
 }
 
 /*---------------------------------------------------------------------------
- Name        : device_register_get_state
- Input       : ��
- Output      : device_reg_state_t - ��ǰע��״̬
- Description :
- ��ȡ�豸ע�����̵ĵ�ǰ״̬�������ϲ������ж��Ƿ���Ҫ����/�Ƿ��ѳɹ���
+ Name        : device_reg_state_t device_register_get_state(void)
+ Input       : 无
+ Output      : device_reg_state_t - 当前注册状态
+ Description : 获取设备注册流程的当前状态，供上层调用方判断是否需要注册/是否已成功。
 ---------------------------------------------------------------------------*/
 device_reg_state_t device_register_get_state(void)
 {
@@ -286,12 +284,11 @@ device_reg_state_t device_register_get_state(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : device_register_get_credentials
- Input       : ��
- Output      : const device_credentials_t* - ƾ�ڽṹ��ָ��
- Description :
- ��ȡ��ǰ�豸ƾ��(`s_cred`)��ֻ��ָ�롣
- ע�⣺���ص����ڲ���̬�����ַ�����÷���Ҫ�ڸ������ϡ�
+ Name        : const device_credentials_t* device_register_get_credentials(void)
+ Input       : 无
+ Output      : const device_credentials_t* - 凭证结构体指针
+ Description : 获取当前设备凭证(s_cred)的只读指针。
+               注意：返回的是内部静态变量地址，调用方不要在该地址上写入。
 ---------------------------------------------------------------------------*/
 const device_credentials_t* device_register_get_credentials(void)
 {
@@ -299,18 +296,17 @@ const device_credentials_t* device_register_get_credentials(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : device_register_load_from_flash
- Input       : ��
- Output      : true=���سɹ�, false=����ʧ��/������Ч
- Description :
- ��EEPROM�����豸ƾ�õ� `s_cred`��
- �ļ�У��
- - ��ȡ `cred_store_t` ���ڽṹ
- - ����CRC8����洢�� `tmp.crc8` �Ƚ�
- - У�� `tmp.valid == 0x55`
- �ɹ���
- - ���ƽ��ֶε� `s_cred`
- - �� `s_state` ��Ϊ `DEVICE_REG_SUCCESS`
+ Name        : bool device_register_load_from_flash(void)
+ Input       : 无
+ Output      : true=加载成功, false=读取失败/数据无效
+ Description : 从EEPROM加载设备凭证到 s_cred。
+               校验步骤：
+               - 读取 cred_store_t 内部结构
+               - 重新计算CRC8与存储的 tmp.crc8 比较
+               - 校验 tmp.valid == 0x55
+               成功时：
+               - 复制各字段到 s_cred
+               - 将 s_state 置为 DEVICE_REG_SUCCESS
 ---------------------------------------------------------------------------*/
 bool device_register_load_from_flash(void)
 {
@@ -344,17 +340,16 @@ bool device_register_load_from_flash(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : device_register_save_to_flash
- Input       : ��
- Output      : true=�����ɹ�, false=����ʧ��
- Description :
- �����ǰƾ�� `s_cred` ���浽EEPROM��
- �Ϊ��
- - ��װ `cred_store_t tmp`��д��valid��־��CRC8
- - ��16�ֽ�ҳд��(��EEPROMҳ��Сһ��)����ҳ���� `BSP_I2C_Write`
- ע�⣺
- - д���ַʹ�� `CRED_ADDR`�����÷�Ӧȷ��������δ����������ռ�á�
- - ����;д��ʧ�ܷ���false���ϲ��ѡ�����Ի����жϡ�
+ Name        : bool device_register_save_to_flash(void)
+ Input       : 无
+ Output      : true=保存成功, false=写入失败
+ Description : 将当前凭证 s_cred 保存到EEPROM。
+               流程：
+               - 填装 cred_store_t tmp，写入valid标志和CRC8
+               - 按16字节页写入（与EEPROM页大小一致），每页调用 BSP_I2C_Write
+               注意：
+               - 写入地址使用 CRED_ADDR，调用方应确保该地址未被其他数据占用。
+               - 任一页写入失败返回false，上层可选择重试或报警处理。
 ---------------------------------------------------------------------------*/
 bool device_register_save_to_flash(void)
 {
@@ -368,9 +363,17 @@ bool device_register_save_to_flash(void)
     tmp.valid = 0x55;
     tmp.crc8 = cred_crc8((uint8_t*)&tmp, sizeof(tmp) - 1);
 
-    if (eeprom_write_block(CRED_ADDR, (uint8_t *)&tmp, (uint16_t)sizeof(tmp)) != LL_OK)
+    // 分页写(16字节/页)
+    int pages = (sizeof(tmp) + 15) / 16;
+    for (int i = 0; i < pages; i++)
     {
-        return false;
+        uint16_t page_addr = CRED_ADDR + i * 16;
+        if (BSP_I2C_Write(CM_I2C, EEPROM_I2C_ADDR,
+                          (uint8_t[2]){(uint8_t)(page_addr >> 8), (uint8_t)page_addr},
+                          2, (uint8_t *)&tmp + i * 16, 16) != LL_OK)
+        {
+            return false;
+        }
     }
     return true;
 }

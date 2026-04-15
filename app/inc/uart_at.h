@@ -13,25 +13,25 @@ typedef enum {
 } at_nb_state_t;
 
 /*============================================================================
- UART ATͨ�Žӿ�
- ������ML307R 4Gģ��ͨ�ŵ�AT����ͨ��
+ UART AT通信接口
+ 专供ML307R 4G模组通信的AT命令通道
 ============================================================================*/
 
 /**
- * ��ʼ��UART2�ӿ�
- * ����115200 8N1��ʹ��RX�ж�
+ * 初始化UART2接口
+ * 波特率115200 8N1，使能RX中断
  */
 void uart_at_init(void);
 
 /**
- * ����AT����ȴ���������Ӧ
- * �����ȴ�ֱ���յ�expected_ok�ַ�����ʱ
- * @param cmd AT�����ַ���
- * @param expected_ok ��������Ӧ�ؼ���
- * @param timeout_ms ��ʱʱ��(����)
- * @param response ��Ӧ���������������
- * @param resp_len ��Ӧ����������
- * @return 0=�ɹ�, -1=��ʱ, -2=����
+ * 发送AT命令并等待完整响应
+ * 阻塞等待直到收到expected_ok字符串或超时
+ * @param cmd AT命令字符串
+ * @param expected_ok 期望的响应关键字
+ * @param timeout_ms 超时时间（毫秒）
+ * @param response 响应接收缓冲区（可为NULL）
+ * @param resp_len 响应缓冲区长度
+ * @return 0=成功, -1=超时, -2=错误
  */
 int at_send_command(const char *cmd, const char *expected_ok,
                     uint32_t timeout_ms, char *response, int resp_len);
@@ -49,30 +49,30 @@ int at_get_last_error_code(void);
 const char *at_get_last_error_line(void);
 
 /**
- * ����ԭʼ����(������Ӧ)
- * ����XMODEM OTA����
- * @param data ����ָ��
- * @param len ���ݳ���
+ * 发送原始数据（不等响应）
+ * 适用于XMODEM OTA等场景
+ * @param data 数据指针
+ * @param len 数据长度
  */
 void at_send_raw(const uint8_t *data, uint16_t len);
 
 /**
- * ע��URC( unsolicited result code)�ص�
- * ���յ�����keyword����Ϣʱ�Զ�����callback
- * @param keyword �ؼ���
- * @param callback �ص�����
+ * 注册URC（unsolicited result code）回调
+ * 收到包含keyword的消息时自动调用callback
+ * @param keyword 关键字
+ * @param callback 回调函数
  */
 typedef void (*urc_callback_t)(const char *line);
 void at_register_urc(const char *keyword, urc_callback_t callback);
 
 /**
- * ���RX������
+ * 清空RX缓冲区
  */
 void at_flush_rx(void);
 
 /**
- * ����UART���������ݣ����������е��ã�
- * ���������յ��е������URC�ص�
+ * 处理UART接收到的数据（在主循环中调用）
+ * 解析AT行并触发URC回调
  */
 void uart_at_process(void);
 

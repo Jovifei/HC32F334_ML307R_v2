@@ -5,8 +5,8 @@
 #include <stdbool.h>
 
 /*============================================================================
- AT����������ӿ�
- MQTT���AT�����װ
+ AT解析器对外接口
+ MQTT相关AT命令封装
 ============================================================================*/
 
 /**
@@ -26,63 +26,56 @@ typedef void (*mqtt_msg_callback_t)(const char *topic, const char *payload, int 
  */
 extern volatile int g_mqtt_conn_result;
 
-/**
- * MQTT断开URC结果（由 mqtt_urc_handler 在收到 +MQTTURC: "disc" 时设置）
- * -1 = 未断开
- * >=0 = 断开原因码
- */
-extern volatile int g_mqtt_disc_code;
-
 /*============================================================================
- MQTT AT�����װ
-============================================================================*/
+/*============================================================================
+ MQTT AT命令封装
 
 /**
- * ����MQTT���Ӳ���
- * @param host MQTT��������ַ
- * @param port MQTT�������˿�
- * @param client_id �ͻ���ID
- * @param username �û���
- * @param password ����
- * @return 0=�ɹ�, -1=ʧ��
+ * 配置MQTT连接参数
+ * @param host MQTT服务器地址
+ * @param port MQTT服务器端口
+ * @param client_id 客户端ID
+ * @param username 用户名
+ * @param password 密码
+ * @return 0=成功, -1=失败
  */
 int at_mqtt_config(const char *host, int port, const char *client_id,
                    const char *username, const char *password);
 
 /**
- * ����MQTT����
- * @return 0=�ɹ�, -1=ʧ��
+ * 建立MQTT连接
+ * @return 0=成功, -1=失败
  */
 int at_mqtt_connect(void);
 
 /**
- * �Ͽ�MQTT����
- * @return 0=�ɹ�, -1=ʧ��
+ * 断开MQTT连接
+ * @return 0=成功, -1=失败
  */
 int at_mqtt_disconnect(void);
 
 /**
- * ����MQTT����
- * @param topic ����
- * @param qos ���������ȼ�(0/1)
- * @return 0=�ɹ�, -1=ʧ��
+ * 订阅MQTT主题
+ * @param topic 主题
+ * @param qos 消息服务质量(0/1)
+ * @return 0=成功, -1=失败
  */
 int at_mqtt_subscribe(const char *topic, int qos);
 
 /**
- * ����MQTT��Ϣ
- * @param topic ����
- * @param qos ���������ȼ�(0/1)
- * @param data ����
- * @param data_len ���ݳ���
- * @return 0=�ɹ�, -1=ʧ��
+ * 发布MQTT消息
+ * @param topic 主题
+ * @param qos 消息服务质量(0/1)
+ * @param data 数据
+ * @param data_len 数据长度
+ * @return 0=成功, -1=失败
  */
 int at_mqtt_publish(const char *topic, int qos, const char *data, int data_len);
 
 /**
- * ע��MQTT������Ϣ�ص�
- * ���յ������������Ϣʱ�Զ�����
- * @param callback �ص�����
+ * 注册MQTT下行消息回调
+ * 收到平台下发的消息时自动调用
+ * @param callback 回调函数
  */
 void at_mqtt_register_callback(mqtt_msg_callback_t callback);
 
