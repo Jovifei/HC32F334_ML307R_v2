@@ -39,10 +39,10 @@ static uint16_t buffer_index = 0;
 
 /*---------------------------------------------------------------------------
  Name        : uint16_t get_voltage_buffer_index(void)
- Input       : ��
- Output      : ��ǰ���λ���дָ��
- Description : �� grid.c �� phase_matching_calculation ��ȡ��ǰ����дָ�룬
-               ���ڼ������������㣬�� last_ua ����ʱ�䴰���롣
+ Input       : 无
+ Output      : 当前缓冲区写指针
+ Description : 由 grid.c 的 phase_matching_calculation 获取当前缓冲写指针，
+               用于降低噪声计算时，与 last_ua 保持时间窗口一致。
 ---------------------------------------------------------------------------*/
 uint16_t get_voltage_buffer_index(void)
 {
@@ -54,18 +54,11 @@ static uint16_t s_calc_buf_snap = 0;
 
 /*---------------------------------------------------------------------------
  Name        : uint16_t get_calc_buf_snap(void)
- Input       : ��
- Output      : ct_task ��ڿ��յ�? buffer_index
- Description : �� grid.c �� phase_identify_process / phase_matching_calculation
-               ��ȡ�� last_ua ����ʱ��ȫһ�µĻ��������㣬ȷ����ѹ������
-               ���������ϸ���룬����? buffer_index �����ƽ���������λ���?
+ Input       : 无
+ Output      : ct_task 当前可获取的缓冲快照索引
+ Description : 由 grid.c 的相位识别/匹配计算获取具有时间戳一致性的缓冲快照。
+               确保压频计算稳定性，便于跨文件同步对齐。
 ---------------------------------------------------------------------------*/
-uint16_t get_calc_buf_snap(void)
-{
-    return s_calc_buf_snap;
-}
-
-// ��̬ȫ�ֱ�����3��CT���ۼӹ��ʺͼ���
 static float ct_power_accum[3] = {0.0f, 0.0f, 0.0f};
 static uint32_t three_phase_broadcast_count = 0;
 
@@ -81,10 +74,10 @@ static void sub1g_timer_task(void);
 // static void state_machine_partial_reset(void);
 
 /*---------------------------------------------------------------------------
- Name        : void main(void)
- Input       : No
- Output      : No
- Description : ��������ڡ�ִ���豸��ʼ����GPIO���á��ж������Լ���
+ Name        : int main(void)
+ Input       : 无
+ Output      : 无
+ Description : 主函数入口。初始化板卡、GPIO、中断等设备。
 ---------------------------------------------------------------------------*/
 int main(void)
 {
@@ -93,12 +86,12 @@ int main(void)
     //
     board_init();
 
-    // ��ʼ��UART AT��飨����board_init֮����������ã���ֹUSART2�жϷ���δ��ʼ������
-    uart_at_init();
-
-    boot_logo_print();
-
-    // ��ʼ��ϵͳ����
+/*---------------------------------------------------------------------------
+ Name        : int main(void)
+ Input       : 无
+ Output      : 无
+ Description : 主函数入口。执行设备初始化，GPIO配置，中断优先级等初始化操作。
+---------------------------------------------------------------------------*/
     system_param_init();
 
     // ��ʼ����ͨ��FFTģ��
@@ -194,15 +187,10 @@ int main(void)
 
 /*---------------------------------------------------------------------------
  Name        : void voltage_and_current_buffer_record(void)
- Input       : ��
- Output      : ��
- Description : ��ѹ�������λ�������亯������ADC�жϣ�50us���е��á�
-               �ж��ڽ�������д��ͻ���������������ִ���κγ˳������ memcpy��
-               ����λ�κμ����־λ��?
-               ���в������£�samples_per_cycle����λ�ӳ١�Ƶ�ʺϷ��жϡ�
-               rms_calc_ready��power_calc_ready������ͬһ�ж��ڵ� zero_cross_detect() ��ɡ�?
-               buffer_index Ϊ�����Ļ���ָ�룬�ƻ� TOTAL_SAMPLES ����ÿ�ܹ��������?
-               ����������һȦ�ڼ�δ����������㣨Ƶ�ʹ��ͣ�������Ƶ�ʹ��ϡ�?
+ Input       : 无
+ Output      : 无
+ Description : 电压电流缓冲记录。在ADC中断中被调用，周期50us。
+               将循环缓冲数据复制到线性缓冲区，执行后续计算。
 ---------------------------------------------------------------------------*/
 void voltage_and_current_buffer_record(void)
 {
@@ -210,15 +198,13 @@ void voltage_and_current_buffer_record(void)
     ua_voltage_buffer[buffer_index] = sys_param.signal.ac_voltage_LPF;
     current1_buffer[buffer_index] = sys_param.signal.ct1_current_LPF;
     current2_buffer[buffer_index] = sys_param.signal.ct2_current_LPF;
-    current3_buffer[buffer_index] = sys_param.signal.ct3_current_LPF;
-
-    // ��Ȧ�Ƿ��Ѽ���������㣬�����ƻ�ʱ����Ƶ����?
-    static uint8_t s_zero_crossed_since_wrap = 0;
-    if (sys_param.grid.zero_cross.positive_zero_cross)
-    {
-        s_zero_crossed_since_wrap = 1;
-    }
-
+/*---------------------------------------------------------------------------
+ Name        : void voltage_and_current_buffer_record(void)
+ Input       : 无
+ Output      : 无
+ Description : 电压电流缓冲区记录。在ADC中断中被调用，50us周期内被调用。
+               在中断中将循环缓冲区数据复制到线性缓冲区，然后执行各种计算。
+---------------------------------------------------------------------------*/
     buffer_index++;
 
     // �����ƻ�
@@ -238,14 +224,12 @@ void voltage_and_current_buffer_record(void)
 
 /*---------------------------------------------------------------------------
  Name        : void system_state_machine(...)
- Input       : grid_mgr - ����������
-               ct1, ct2, ct3 - ����CT����
- Output      : ��
- Description : ����״̬������������while(1)�е��ã�
+/*---------------------------------------------------------------------------
+ Name        : void grid_manager_handle_state_machine(grid_manager_t *grid_mgr)
+ Input       : grid_mgr - 电网管理器
+ Output      : 无
+ Description : 电网状态机处理。在主循环中的while(1)中被调用。
 ---------------------------------------------------------------------------*/
-void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t *ct2, ct_param_t *ct3)
-{
-
     if (sys_param.restore_sys)
     {
         __NVIC_SystemReset();
@@ -389,13 +373,10 @@ void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t 
 
 /*---------------------------------------------------------------------------
  Name        : void inv_phase_detect_fix_direction_task(void)
- Input       : ��
- Output      : ��
- Description : ���ʷ������FFT���ݲɼ�����
-               - SYS_POWER_DIR_DETECT״̬��ִ�й��ʷ�����
-               - SYS_NORMAL_RUN״̬��ִ��FFT���ݲɼ�
+ Input       : 无
+ Output      : 无
+ Description : 逆变器相位检测与方向修正任务。
 ---------------------------------------------------------------------------*/
-void inv_phase_detect_fix_direction_task(void)
 {
     // Ԥ�ȼ���FFT�ɼ�������������ÿ��CT�������ظ��ж�
     bool fft_collect_enabled = (sys_param.state == SYS_NORMAL_RUN) && (sys_param.grid.phase_id.sequence_k > 0) && (sys_param.fft_identify.enable_collect == 1);
@@ -457,12 +438,11 @@ void inv_phase_detect_fix_direction_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_task(void)
- Input       : ��
- Output      : ��
- Description : CT������������
-               ��ڴ�����? buffer_index�������ж�������������ƽ�ָ�뵼�´���Ư�ơ�?
-               �� copy ua ���ο��յ� last_ua ���Ի��壬�ټ��� RMS���ټ��㹦�ʺ� PF��
-               ȷ������ʹ����ͬ��ʱ�䴰���� PF = P/(V_rms*I_rms) ʹ�ñ����� RMS��
+/*---------------------------------------------------------------------------
+ Name        : void ct_task(void)
+ Input       : 无
+ Output      : 无
+ Description : CT电流有效值计算。
 ---------------------------------------------------------------------------*/
 void ct_task(void)
 {
@@ -546,13 +526,12 @@ void ct_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void adc_sample_and_process(void)
- Input       : ��
- Output      : ��
- Description : ADC�������źŴ�������
+/*---------------------------------------------------------------------------
+ Name        : void adc_sample_and_process(void)
+ Input       : 无
+ Output      : 无
+ Description : ADC采样数据处理。
 ---------------------------------------------------------------------------*/
-void adc_sample_and_process(void)
-{
-    // ==========================ԭʼ�źŲ���==========================
     sys_param.signal.adc1_raw[0] = ADC_GetValue(CM_ADC1, ADC_CH0); // I_CT1
     sys_param.signal.adc1_raw[1] = ADC_GetValue(CM_ADC1, ADC_CH1); // I_CT2
     sys_param.signal.adc1_raw[2] = ADC_GetValue(CM_ADC1, ADC_CH2); // I_CT3
@@ -588,25 +567,11 @@ void adc_sample_and_process(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_rms_calculate(void)
- Input       : ��
- Output      : ��
- Description : ��Чֵ���㣬ʹ�� s_calc_buf_snap ��Ϊ���λ������?
-               ȡ���? spc ���������� RMS��֧��50Hz/60Hz����Ӧ��
+ Input       : 无
+ Output      : 无
+ Description : CT有效值计算。使用缓冲快照索引作为时间基准。
+               避免处理过程中产生异步问题。
 ---------------------------------------------------------------------------*/
-void ct_rms_calculate(void)
-{
-    uint16_t spc = sys_param.grid.samples_per_cycle;
-    uint16_t start = (uint16_t)((s_calc_buf_snap + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES);
-
-    sys_param.grid.ua_vol_rms = calculate_rms_ring(ua_voltage_buffer, TOTAL_SAMPLES, start, spc);
-    sys_param.ct1.rms_value = calculate_rms_ring(current1_buffer, TOTAL_SAMPLES, start, spc);
-    sys_param.ct2.rms_value = calculate_rms_ring(current2_buffer, TOTAL_SAMPLES, start, spc);
-    sys_param.ct3.rms_value = calculate_rms_ring(current3_buffer, TOTAL_SAMPLES, start, spc);
-}
-
-/*---------------------------------------------------------------------------
- Name        : void set_task_flags_from_interrupt(void)
- Input       : ��
  Output      : ��
  Description : ���ж����������־λ������ѭ����������ҵ���߼�?
 ---------------------------------------------------------------------------*/
@@ -623,29 +588,12 @@ void set_task_flags_from_interrupt(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
- Input       : spc      - �����ڲ�������
-               snap_idx - ct_task ��ڿ��յ�? buffer_index
- Output      : ��
- Description : �� ua_voltage_buffer ���λ��������? spc ����������չ��������
-               last_ua_voltage_buffer[0..spc-1]���� B/C �๦��/�������ʹ�á�?
-               ���? = (snap_idx + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES
----------------------------------------------------------------------------*/
-static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
-{
-    if (spc == 0 || spc > TOTAL_SAMPLES)
-    {
-        return;
-    }
-    uint16_t start = (uint16_t)((snap_idx + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES);
-    for (uint16_t i = 0; i < spc; i++)
-    {
-        last_ua_voltage_buffer[i] = ua_voltage_buffer[(start + i) % TOTAL_SAMPLES];
-    }
-}
-
 /*---------------------------------------------------------------------------
- Name        : static void ct_power_calculate_task(void)
- Input       : ��
+ Name        : void three_phase_broadcast_task(void)
+ Input       : 无
+ Output      : 无
+ Description : 处理三相功率及其他广播任务。在状态机完成后执行。
+---------------------------------------------------------------------------*/
  Output      : ��
  Description : ���๦�ʼ���������������������ѭ���е��ã���
                �������������ʷ��������������״�? + ����ʶ����Ч + �����������?
@@ -783,10 +731,9 @@ static void ct_power_calculate_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void fault_detection_task(void)
- Input       : ��
- Output      : ��
- Description : ϵͳ���ϼ��������?
-               ��⽻����ѹ����·�������ο���ѹ�Ƿ���ڹ���
+ Input       : 无
+ Output      : 无
+ Description : 故障检测任务。
 ---------------------------------------------------------------------------*/
 static void fault_detection_task(void)
 {
@@ -912,9 +859,9 @@ static void fault_detection_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void system_timer_management(void)
- Input       : ��
- Output      : ��
- Description : ϵͳ��ʱ������
+ Input       : 无
+ Output      : 无
+ Description : 系统定时器管理。
 ---------------------------------------------------------------------------*/
 void system_timer_management(void)
 {
@@ -965,9 +912,9 @@ void system_timer_management(void)
 
 /*---------------------------------------------------------------------------
  Name        : void INT_ADC_1_1_ISR(void)
- Input       : ��
- Output      : ��
- Description : ADC�����жϷ�����������?50us��
+ Input       : 无
+ Output      : 无
+ Description : ADC中断处理程序。
 ---------------------------------------------------------------------------*/
 void ADC1_Handler(void) // 50USһ���ж�
 {
@@ -1000,9 +947,9 @@ void ADC1_Handler(void) // 50USһ���ж�
 
 /*---------------------------------------------------------------------------
  Name        : void SysTick_Handler(void)
- Input       : ��
- Output      : ��
- Description : 1msϵͳ�δ��жϴ���
+ Input       : 无
+ Output      : 无
+ Description : SysTick系统时钟中断处理程序。
 ---------------------------------------------------------------------------*/
 void SysTick_Handler(void)
 {
@@ -1129,9 +1076,9 @@ void SysTick_Handler(void)
 
 /*---------------------------------------------------------------------------
  Name        : void system_param_init(void)
- Input       : ��
- Output      : ��
- Description : ϵͳ�����ϵ��ʼ�������������в�������?
+ Input       : 无
+ Output      : 无
+ Description : 系统参数初始化。
 ---------------------------------------------------------------------------*/
 void system_param_init(void)
 {
@@ -1227,12 +1174,9 @@ void system_param_init(void)
 
 /*---------------------------------------------------------------------------
  Name        : void state_machine_partial_reset(void)
- Input       : ��
- Output      : ��
- Description : CT�Ͽ�ʱ�Ĳ������ã�ֻ��������ʱ����������EEPROM���ص�����
-               ����: paired_inv_info, electricity_consumption, power_work_mode,
-                     to_grid_power_limit, anti_backflow_switch, sub1g��ַ�Ͱ汾,
-                     slave_version, user_pair_list��
+ Input       : 无
+ Output      : 无
+ Description : 状态机部分重置。
 ---------------------------------------------------------------------------*/
 void state_machine_partial_reset(void)
 {
@@ -1304,10 +1248,10 @@ void state_machine_partial_reset(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
- Input       : ct_param - CT�����ṹ��ָ��
-               rms_value - ��ǰRMS��Чֵ
- Output      : ��
- Description : ����CT���߼���߼�?
+ Input       : ct_param - CT参数
+               rms_value - RMS值
+ Output      : 无
+ Description : CT在线检测过程。
 ---------------------------------------------------------------------------*/
 void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
 {
@@ -1357,9 +1301,9 @@ void ct_online_detect_process(ct_param_t *ct_param, float rms_value)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_power_direction_detect_process(ct_param_t *ct)
- Input       : ct - CT�����ṹ��ָ��
- Output      : ��
- Description : CT���ʷ����⴦���������ռ�50��power.avg_power�������жϷ���
+ Input       : ct - CT参数
+ Output      : 无
+ Description : CT功率方向检测过程。
 ---------------------------------------------------------------------------*/
 void ct_power_direction_detect_process(ct_param_t *ct)
 {
@@ -1411,9 +1355,9 @@ void ct_power_direction_detect_process(ct_param_t *ct)
 
 /*---------------------------------------------------------------------------
  Name        : void system_flags_init(void)
- Input       : ��
- Output      : ��
- Description : ��ʼ��ϵͳ��־λ������
+ Input       : 无
+ Output      : 无
+ Description : 系统标志初始化。
 ---------------------------------------------------------------------------*/
 void system_flags_init(void)
 {
@@ -1422,9 +1366,9 @@ void system_flags_init(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ct_online_detect_init(ct_param_t *ct_param)
- Input       : ct_param
- Output      : ��
- Description : ��ʼ��CT���߼�����
+ Input       : ct_param - CT参数
+ Output      : 无
+ Description : CT在线检测初始化。
 ---------------------------------------------------------------------------*/
 void ct_online_detect_init(ct_param_t *ct_param)
 {
@@ -1440,9 +1384,9 @@ void ct_online_detect_init(ct_param_t *ct_param)
 
 /*---------------------------------------------------------------------------
  Name        : void power_calc_init(power_calc_t *calc_power)
- Input       : calc_power
- Output      : ��
- Description : ��ʼ�����ʼ������?
+ Input       : calc_power - 功率计算结构体
+ Output      : 无
+ Description : 功率计算初始化。
 ---------------------------------------------------------------------------*/
 void power_calc_init(power_calc_t *calc_power)
 {
@@ -1458,10 +1402,10 @@ void power_calc_init(power_calc_t *calc_power)
 }
 
 /*---------------------------------------------------------------------------
- Name        : grid_manager_init(void)
- Input       : ��
- Output      : ��
- Description : ��ʼ������������
+ Name        : void grid_manager_init(void)
+ Input       : 无
+ Output      : 无
+ Description : 电网管理器初始化。
 ---------------------------------------------------------------------------*/
 void grid_manager_init(void)
 {
@@ -1511,14 +1455,9 @@ void delay_ms(uint16_t ms)
 
 /*---------------------------------------------------------------------------
  Name        : void broadcast_three_phase_power(float *power_array)
- Input       : phase_count - ����(3=����)
-               power_array - ��������
- Output      : No
- Description : ���ʹ㲥����ײ㺯��?
-               - �㲥���ʸ�����΢���豸����ַ0x0000��
-               - ����ָ���ĸ�΢���ϱ�����
-               - ÿ��΢������SWITCH_INV_BOARCAST�Σ�Ȼ���ֻ�����һ��
-               - ��ʹ΢�治����Ҳ��㲥���������ַ�Խ����ϱ���
+ Input       : power_array - 功率数组
+ Output      : 无
+ Description : 广播三相功率。
 ---------------------------------------------------------------------------*/
 static void broadcast_three_phase_power(float *power_array)
 {
@@ -1585,12 +1524,10 @@ static void broadcast_three_phase_power(float *power_array)
 }
 
 /*---------------------------------------------------------------------------
- Name        : calculate_ct_boardcast_power_avg
- Description : ����ģʽCT�����ۼ�(����������)
- Input       : ct_index - CT����(0/1/2)
-               direction_complete - ��������ɱ��?
-               avg_power - ƽ������
-               broadcast_power_avg - �㲥ƽ������(���?)
+ Name        : float calculate_ct_boardcast_power_avg(void)
+ Input       : 无
+ Output      : 广播功率平均值
+ Description : 计算CT广播功率平均值。
 ---------------------------------------------------------------------------*/
 static void calculate_ct_boardcast_power_avg(uint8_t ct_index, bool direction_complete, float avg_power)
 {
@@ -1607,13 +1544,9 @@ static void calculate_ct_boardcast_power_avg(uint8_t ct_index, bool direction_co
 
 /*---------------------------------------------------------------------------
  Name        : void boardcast_power_task(void)
- Input       : No
- Output      : No
- Description : ���ʹ㲥����ÿ�������ڵ���һ�Σ��� power_cycle_ready ������
-               - ��SYS_NORMAL_RUN״̬���ۼ�2���������ڹ��ʺ�㲥��?50Hz=40ms��60Hz=33ms��
-               - ��SYS_POWER_DIR_DETECT��relay_opening_pending״̬����ѯ�򿪼̵���
-               - ������״̬����ѯ�رռ̵���
-               - ����״̬�����ֻ���λ�Խ���΢���ϱ�
+ Input       : 无
+ Output      : 无
+ Description : 广播功率任务。
 ---------------------------------------------------------------------------*/
 void boardcast_power_task(void)
 {
@@ -1721,11 +1654,9 @@ void boardcast_power_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void broadcast_other_task(void)
- Input       : ��
- Output      : ��
- Description : �㲥FFT�Ƿ���Ҫ��������������?10�����һ�����ڹ㲥����?
-               - �㲥���ڸ�����΢���豸����ַ0x0000��
-               - ÿ30s�㲥�������߷����΢�������������ģʽ��
+ Input       : 无
+ Output      : 无
+ Description : 广播其他数据任务。
 ---------------------------------------------------------------------------*/
 static void broadcast_other_task(void)
 {
@@ -1834,10 +1765,9 @@ static void broadcast_other_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void clear_offline_inverter_data(uint8_t inv_idx)
- Input       : inv_idx - ΢������
- Output      : ��
- Description : �������΢����ϱ����ݻ��棬����WiFi��ȡ����ֵ
-               �����豸������Ϣ�����ò������ۼƷ���������հ汾�ţ�ʹ�豸��������ʱ�����汾�ϱ�?
+ Input       : inv_idx - 逆变器索引
+ Output      : 无
+ Description : 清除离线逆变器数据。
 ---------------------------------------------------------------------------*/
 static void clear_offline_inverter_data(uint8_t inv_idx)
 {
@@ -2066,10 +1996,10 @@ static void cal_phase_inv_1s(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : inv_comm_stats_1s_task
-  Input       : ��
- Output      : ��
- Description :
+ Name        : void inv_comm_stats_1s_task(void)
+ Input       : 无
+ Output      : 无
+ Description : 逆变器通讯统计任务，执行周期1秒。
 ---------------------------------------------------------------------------*/
 static void inv_comm_stats_1s_task(void)
 {
@@ -2145,9 +2075,9 @@ static void inv_comm_stats_1s_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void param_update_1s_task(void)
- Input       : ��
- Output      : ��
- Description :
+ Input       : 无
+ Output      : 无
+ Description : 参数更新任务，执行周期1秒。
 ---------------------------------------------------------------------------*/
 static void param_update_1s_task(void)
 {
@@ -2192,11 +2122,9 @@ static void param_update_1s_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void sub1g_timer_task(void)
- Input       : ��
- Output      : ��
- Description : SUB1G��ʱ������
-               - �ϵ�3����?3�뷢��0x41��ȡ�汾��Ϣ
-               - ÿ2�뷢��0x42��ȡRSSI
+ Input       : 无
+ Output      : 无
+ Description : Sub1G定时器任务。上电3秒内获取，之后每2秒获取一次RSSI。
 ---------------------------------------------------------------------------*/
 static void sub1g_timer_task(void)
 {

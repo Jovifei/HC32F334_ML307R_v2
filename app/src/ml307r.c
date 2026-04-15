@@ -98,16 +98,10 @@ static const char client_cert_data[] = CLIENT_CERT_DATA;
 static ml307r_state_t s_ml_state = ML307R_STATE_INIT;
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_init
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- ML307R 4Gģ���ʼ��������ִ�����²���??
- 1. ATͨ�Ų���
- 2. �رջ���(ATE0)
- 3. ���SIM��״̬(AT+CPIN?)
- 4. �ȴ�����ע��(AT+CEREG?)�����??30��
- 5. ����PDP����(AT+MIPCALL=1,1)
+ Name        : void ml307r_init(void)
+ Input       : 无
+ Output      : 无
+ Description : ML307R模块初始化。
 ---------------------------------------------------------------------------*/
 int ml307r_init(void)
 {
@@ -228,17 +222,10 @@ int ml307r_init(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_get_state
- Input       : ��
- Output      : ml307r_state_t - ��ǰML307Rģ��״̬
- Description :
- ��ȡML307R 4Gģ��ĵ�ǰ״̬��������??
- - ML307R_STATE_INIT: ��ʼ��״̬
- - ML307R_STATE_SIM_CHECK: SIM�����״�?
- - ML307R_STATE_REGISTERED: ������ע��
- - ML307R_STATE_DIAL: PDP����״̬
- - ML307R_STATE_CONNECTED: ���ӳɹ�
- - ML307R_STATE_ERROR: ����״̬
+ Name        : uint8_t ml307r_get_state(void)
+ Input       : 无
+ Output      : ML307R状态
+ Description : 获取ML307R模块状态。
 ---------------------------------------------------------------------------*/
 ml307r_state_t ml307r_get_state(void)
 {
@@ -247,12 +234,10 @@ ml307r_state_t ml307r_get_state(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_get_signal_quality
- Input       : sq - signal_quality_t�ṹ��ָ�룬��������ź�����??
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- ��ȡML307R 4Gģ����ź�������ͨ��AT+CSQ�����ѯ��??
- ����RSSI(�ź�ǿ��)��BER(������)����������
+ Name        : uint8_t ml307r_get_signal_quality(void)
+ Input       : 无
+ Output      : 信号质量值
+ Description : 获取ML307R信号质量。
 ---------------------------------------------------------------------------*/
 int ml307r_get_signal_quality(signal_quality_t *sq)
 {
@@ -274,12 +259,10 @@ int ml307r_get_signal_quality(signal_quality_t *sq)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_is_arrears
- Input       : ��
- Output      : true=Ƿ��(�ź�������δע��), false=����
- Description :
- �ж�ML307Rģ���Ƿ���Ƿ��״̬��
- ������RSSI��10-31��Χ��(�ź�����)����״̬������ע��/����/�����С�
+ Name        : uint8_t ml307r_is_arrears(void)
+ Input       : 无
+ Output      : 欠费状态
+ Description : 检查是否欠费。
 ---------------------------------------------------------------------------*/
 bool ml307r_is_arrears(void)
 {
@@ -294,16 +277,10 @@ bool ml307r_is_arrears(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_reconnect
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- ML307R 4Gģ���������Ӻ�����
- ִ�����²��裺
- 1. �ر���Ƶ����(AT+CFUN=0)
- 2. ������Ƶ����(AT+CFUN=1)
- 3. �ȴ���������ע��(AT+CEREG?)�����??30��
- 4. ���¼���PDP����(AT+MIPCALL=1,1)
+ Name        : void ml307r_reconnect(void)
+ Input       : 无
+ Output      : 无
+ Description : ML307R重新连接。
 ---------------------------------------------------------------------------*/
 int ml307r_reconnect(void)
 {
@@ -376,11 +353,10 @@ static char s_topic_down[64] = {0};
 static mqtt_downlink_cb s_mqtt_downlink_cb = NULL;
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_connect
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- MQTT�ͻ������Ӻ���
+ Name        : void ml307r_mqtt_connect(void)
+ Input       : 无
+ Output      : 无
+ Description : MQTT连接。
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_connect(void)
 {
@@ -443,11 +419,10 @@ int ml307r_mqtt_connect(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_disconnect
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- MQTT�ͻ��˶Ͽ����Ӻ���
+ Name        : void ml307r_mqtt_disconnect(void)
+ Input       : 无
+ Output      : 无
+ Description : MQTT断开连接。
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_disconnect(void)
 {
@@ -459,13 +434,11 @@ int ml307r_mqtt_disconnect(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_publish
- Input       : topic - ����
-                 payload - ��Ϣ�غ�
-                 qos - ���������ȼ�(0/1)
- Output      : at_mqtt_publish�ķ���ֵ
- Description :
- MQTT������Ϣ�����������ݷ�����ָ������
+ Name        : void ml307r_mqtt_publish(const char *topic, const char *payload)
+ Input       : topic - MQTT主题
+               payload - 消息载荷
+ Output      : 无
+ Description : MQTT发布消息。
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_publish(const char *topic, const char *payload, int qos)
 {
@@ -476,11 +449,10 @@ int ml307r_mqtt_publish(const char *topic, const char *payload, int qos)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_get_state
- Input       : ��
- Output      : mqtt_state_t - ��ǰMQTT����״̬
- Description :
- ��ȡMQTT�ͻ��˵ĵ�ǰ״̬
+ Name        : uint8_t ml307r_mqtt_get_state(void)
+ Input       : 无
+ Output      : MQTT状态
+ Description : 获取MQTT连接状态。
 ---------------------------------------------------------------------------*/
 mqtt_state_t ml307r_mqtt_get_state(void)
 {
@@ -520,12 +492,10 @@ static void on_mqtt_message(const char *topic, const char *payload, int len);
 static int s_mqtt_msg_id = 0;
 
 /*---------------------------------------------------------------------------
- Name        : publish_device_info
- Input       : ��
- Output      : ��
- Description :
- �ϱ��豸��Ϣ���ƶˡ�
- �����豸SN����Ʒ�ͺš�MCU�汾��RSSI�ź�ǿ�ȡ�
+ Name        : void publish_device_info(void)
+ Input       : 无
+ Output      : 无
+ Description : 发布设备信息。
 ---------------------------------------------------------------------------*/
 static void publish_device_info(void)
 {
@@ -541,12 +511,10 @@ static void publish_device_info(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : publish_ct_power
- Input       : ��
- Output      : ��
- Description :
- �ϱ�CT�������ݵ��ƶˡ�
- ������һ·CT�й����ʺ͵����ۼƷ�������
+ Name        : void publish_ct_power(void)
+ Input       : 无
+ Output      : 无
+ Description : 发布CT功率信息。
 ---------------------------------------------------------------------------*/
 static void publish_ct_power(void)
 {
@@ -572,22 +540,10 @@ typedef struct
 } prop_item_t;
 
 /*---------------------------------------------------------------------------
- Name        : parse_params
- Input       : json  - JSON�ַ���(���� "params":[{...},...] �ı���)
-                 items - ������飬���ڱ����������(siids/piid/value)��
-                 max_n - items�����������??
- Output      : ʵ�ʽ�����������(0��ʾδ���������ʽ��ƥ��??)
- Description :
- ���ƶ�����JSON�����н��� "params" �����ֶΣ���ȡÿһ��ģ�??
- - siid / piid
- - value(��ѡ)��ͳһ����Ϊ�ַ��� `value_str`������λ `has_value`
- ��;��
- - `handle_get_properties()`������ get_properties �������??(siids/piid)
- - `handle_set_properties()`������ set_properties �������??(siids/piid/value)
- ˵�������ƣ�
- - ��ʵ��Ϊ�������ַ���ɨ��/��ȡ������ͨ��JSON������
- - ��֧�� value
-Ϊ��������/�����ŵȷָ����ļ�ֵ(����/����/�������ŵ�Ƭ��)������JSON���ϲ����д���
+ Name        : void parse_params(cJSON *params)
+ Input       : params - JSON参数对象
+ Output      : 无
+ Description : 解析MQTT消息中的参数。
 ---------------------------------------------------------------------------*/
 static int parse_params(const char *json, prop_item_t *items, int max_n)
 {
@@ -639,11 +595,10 @@ static int parse_params(const char *json, prop_item_t *items, int max_n)
 }
 
 /*---------------------------------------------------------------------------
- Name        : parse_msg_id
- Input       : json - JSON�ַ���(���� "id":xxx �ֶ�)
- Output      : id��ֵ(����ʧ�ܷ���0)
- Description :
- ���ƶ�����JSON��������ȡ "id" �ֶΣ��������ɶ�Ӧ�� result ��Ӧ���ġ�
+ Name        : uint32_t parse_msg_id(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 消息ID
+ Description : 解析消息ID。
 ---------------------------------------------------------------------------*/
 static int parse_msg_id(const char *json)
 {
@@ -656,19 +611,10 @@ static int parse_msg_id(const char *json)
 // ==================== ���Զ�ȡ��get_properties�� ====================
 
 /*---------------------------------------------------------------------------
- Name        : handle_get_properties
- Input       : buf    - ����JSON�����ַ���
-                 msg_id - ����ID(����Ӧ��ƥ��)
- Output      : ��
- Description :
- �����ƶ� "get_properties" ����
- ��Ϊ��
- - ���� `parse_params()` ���� params ���飬��ȡ�����?? siid/piid �б�
- - ���ݱ����̶����SIID/PIIDӳ�䣬��ȡ��Ӧ���������ݲ���װ result ��Ӧ��
-     - SIID=1���豸��Ϣ(�ͺš�SN�������汾��)
-     - SIID=2��CT/��������(���ʡ���������ѹ��Ƶ�ʡ������??)
- - ��֧�ֻ򲻴��ڵ����Է��� code=-4004
- - ͨ�� `ml307r_mqtt_publish()` ����Ӧ����������Topic
+ Name        : void handle_get_properties(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 无
+ Description : 处理获取属性请求。
 ---------------------------------------------------------------------------*/
 static void handle_get_properties(const char *buf, int msg_id)
 {
@@ -769,19 +715,10 @@ static void handle_get_properties(const char *buf, int msg_id)
 // ==================== ����д�루set_properties�� ====================
 
 /*---------------------------------------------------------------------------
- Name        : handle_set_properties
- Input       : buf    - ����JSON�����ַ���
-                 msg_id - ����ID(����Ӧ��ƥ��)
- Output      : ��
- Description :
- �����ƶ� "set_properties" ����
- ��ǰʵ�֣�
- - ���� params ���飬��ȡ siid/piid/value
- - ����������չ��ܣ�Ĭ������д�����?? code=-4004(���Բ�����/����д)
- - ͨ�� `ml307r_mqtt_publish()` ���� result Ӧ��
- ������չ���飺
- -
-�ڴ˴���SIID/PIIDʵ�ֿ�д���ԣ����翪������У׼����������ģʽ�ȣ������÷�Χ/Ȩ��У��
+ Name        : void handle_set_properties(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 无
+ Description : 处理设置属性请求。
 ---------------------------------------------------------------------------*/
 static void handle_set_properties(const char *buf, int msg_id)
 {
@@ -820,17 +757,11 @@ static void handle_set_properties(const char *buf, int msg_id)
 // ==================== ʱ��ͬ�� ====================
 
 /*---------------------------------------------------------------------------
- Name        : timestamp_to_datetime
- Input       : ts       - Unixʱ���??(��)
-                 tz_hours - ʱ��ƫ��(Сʱ�����綫����=8.0)
-                 out      - ����ַ���������??
-                 out_len  - �������������??
- Output      : ��
- Description :
- ��Unixʱ���ת��Ϊ����ʱ���ַ���?? "YYYY-MM-DD HH:MM:SS"��
- ʵ���ص㣺
- - ������ time.h��ʹ�ü򵥵�����/�·���������
- - ���Ƚ�ʱ�����ʱ��ƫ����������ת��??
+ Name        : void timestamp_to_datetime(uint32_t timestamp, char *datetime_str)
+ Input       : timestamp - 时间戳
+               datetime_str - 日期时间字符串
+ Output      : 无
+ Description : 时间戳转换为日期时间。
 ---------------------------------------------------------------------------*/
 static void timestamp_to_datetime(long ts, float tz_hours, char *out, int out_len)
 {
@@ -871,15 +802,10 @@ static void timestamp_to_datetime(long ts, float tz_hours, char *out, int out_le
 }
 
 /*---------------------------------------------------------------------------
- Name        : handle_time_sync
- Input       : buf - ����JSON�����ַ���(���� timestamp/timezone �ֶ�)
- Output      : ��
- Description :
- �����ƶ� "time" ͬ����Ϣ��
- ��Ϊ��
- - ���� "timestamp" ���ѡ��?? "timezone"
- - ���� `timestamp_to_datetime()` �õ�����ʱ���ַ���
- - ���� `sys_param.time` �е� date_time/date/time/today_date ���ֶ�
+ Name        : void handle_time_sync(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 无
+ Description : 处理时间同步请求。
 ---------------------------------------------------------------------------*/
 static void handle_time_sync(const char *buf)
 {
@@ -912,21 +838,11 @@ static void handle_time_sync(const char *buf)
 // ==================== ����Ϣ�ַ� ====================
 
 /*---------------------------------------------------------------------------
- Name        : on_mqtt_message
- Input       : topic   - ����topic
-                 payload - ����payload�ַ���
-                 len     - payload����
- Output      : ��
- Description :
- MQTT������Ϣͳһ��ڻص�??(�� `at_mqtt_register_callback()` ע��)��
- ��Ϊ��
- - ����payload������buf��ȷ��\0��β
- - ���� method �� id �ֶ�
- - �� method �ַ�����Ӧ����������
-     - get_properties -> `handle_get_properties()`
-     - set_properties -> `handle_set_properties()`
-     - time -> `handle_time_sync()`
-     - ota_start -> Ԥ��(��ǰδʵ��)
+ Name        : void on_mqtt_message(const char *topic, const char *payload)
+ Input       : topic - MQTT主题
+               payload - 消息载荷
+ Output      : 无
+ Description : MQTT消息回调处理。
 ---------------------------------------------------------------------------*/
 static void on_mqtt_message(const char *topic, const char *payload, int len)
 {
@@ -1229,11 +1145,10 @@ static void cereg_urc_callback(const char *line)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_task
- Input       : �?
- Output      : �?
- Description :
- ML307R 4G模组主任务，在主循环中调用，实现状态机驱动
+ Name        : void ml307r_task(void)
+ Input       : 无
+ Output      : 无
+ Description : ML307R模块任务，非阻塞状态机，主循环中周期执行。
 ---------------------------------------------------------------------------*/
 void ml307r_task(void)
 {
