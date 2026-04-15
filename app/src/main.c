@@ -36,6 +36,7 @@ uint8_t buffer_filled = 0;
 
 // �ڲ���������
 static uint16_t buffer_index = 0;
+static volatile uint8_t s_zero_crossed_since_wrap = 0;
 
 /*---------------------------------------------------------------------------
  Name        : uint16_t get_voltage_buffer_index(void)
@@ -59,6 +60,11 @@ static uint16_t s_calc_buf_snap = 0;
  Description : 由 grid.c 的相位识别/匹配计算获取具有时间戳一致性的缓冲快照。
                确保压频计算稳定性，便于跨文件同步对齐。
 ---------------------------------------------------------------------------*/
+uint16_t get_calc_buf_snap(void)
+{
+    return s_calc_buf_snap;
+}
+
 static float ct_power_accum[3] = {0.0f, 0.0f, 0.0f};
 static uint32_t three_phase_broadcast_count = 0;
 
@@ -85,13 +91,6 @@ int main(void)
     // SysConfig settings
     //
     board_init();
-
-/*---------------------------------------------------------------------------
- Name        : int main(void)
- Input       : 无
- Output      : 无
- Description : 主函数入口。执行设备初始化，GPIO配置，中断优先级等初始化操作。
----------------------------------------------------------------------------*/
     system_param_init();
 
     // ��ʼ����ͨ��FFTģ��
@@ -198,13 +197,7 @@ void voltage_and_current_buffer_record(void)
     ua_voltage_buffer[buffer_index] = sys_param.signal.ac_voltage_LPF;
     current1_buffer[buffer_index] = sys_param.signal.ct1_current_LPF;
     current2_buffer[buffer_index] = sys_param.signal.ct2_current_LPF;
-/*---------------------------------------------------------------------------
- Name        : void voltage_and_current_buffer_record(void)
- Input       : 无
- Output      : 无
- Description : 电压电流缓冲区记录。在ADC中断中被调用，50us周期内被调用。
-               在中断中将循环缓冲区数据复制到线性缓冲区，然后执行各种计算。
----------------------------------------------------------------------------*/
+    current3_buffer[buffer_index] = sys_param.signal.ct3_current_LPF;
     buffer_index++;
 
     // �����ƻ�
@@ -223,13 +216,13 @@ void voltage_and_current_buffer_record(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : void system_state_machine(...)
-/*---------------------------------------------------------------------------
- Name        : void grid_manager_handle_state_machine(grid_manager_t *grid_mgr)
+ Name        : void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t *ct2, ct_param_t *ct3)
  Input       : grid_mgr - 电网管理器
  Output      : 无
  Description : 电网状态机处理。在主循环中的while(1)中被调用。
 ---------------------------------------------------------------------------*/
+void system_state_machine(grid_manager_t *grid_mgr, ct_param_t *ct1, ct_param_t *ct2, ct_param_t *ct3)
+{
     if (sys_param.restore_sys)
     {
         __NVIC_SystemReset();
@@ -377,6 +370,7 @@ void voltage_and_current_buffer_record(void)
  Output      : 无
  Description : 逆变器相位检测与方向修正任务。
 ---------------------------------------------------------------------------*/
+void inv_phase_detect_fix_direction_task(void)
 {
     // Ԥ�ȼ���FFT�ɼ�������������ÿ��CT�������ظ��ж�
     bool fft_collect_enabled = (sys_param.state == SYS_NORMAL_RUN) && (sys_param.grid.phase_id.sequence_k > 0) && (sys_param.fft_identify.enable_collect == 1);
@@ -436,8 +430,6 @@ void voltage_and_current_buffer_record(void)
     }
 }
 
-/*---------------------------------------------------------------------------
- Name        : void ct_task(void)
 /*---------------------------------------------------------------------------
  Name        : void ct_task(void)
  Input       : 无
@@ -526,12 +518,12 @@ void ct_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : void adc_sample_and_process(void)
-/*---------------------------------------------------------------------------
- Name        : void adc_sample_and_process(void)
  Input       : 无
  Output      : 无
  Description : ADC采样数据处理。
 ---------------------------------------------------------------------------*/
+void adc_sample_and_process(void)
+{
     sys_param.signal.adc1_raw[0] = ADC_GetValue(CM_ADC1, ADC_CH0); // I_CT1
     sys_param.signal.adc1_raw[1] = ADC_GetValue(CM_ADC1, ADC_CH1); // I_CT2
     sys_param.signal.adc1_raw[2] = ADC_GetValue(CM_ADC1, ADC_CH2); // I_CT3
@@ -572,8 +564,27 @@ void ct_task(void)
  Description : CT有效值计算。使用缓冲快照索引作为时间基准。
                避免处理过程中产生异步问题。
 ---------------------------------------------------------------------------*/
- Output      : ��
- Description : ���ж����������־λ������ѭ����������ҵ���߼�?
+void ct_rms_calculate(void)
+{
+    uint16_t spc = sys_param.grid.samples_per_cycle;
+    if (spc == 0 || spc > TOTAL_SAMPLES || !sys_param.grid.zero_cross.frequency_valid || !buffer_filled)
+    {
+        return;
+    }
+
+    uint16_t start = (uint16_t)((s_calc_buf_snap + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES);
+
+    sys_param.grid.ua_vol_rms = calculate_rms_ring(ua_voltage_buffer, TOTAL_SAMPLES, start, spc);
+    sys_param.ct1.rms_value = calculate_rms_ring(current1_buffer, TOTAL_SAMPLES, start, spc);
+    sys_param.ct2.rms_value = calculate_rms_ring(current2_buffer, TOTAL_SAMPLES, start, spc);
+    sys_param.ct3.rms_value = calculate_rms_ring(current3_buffer, TOTAL_SAMPLES, start, spc);
+}
+
+/*---------------------------------------------------------------------------
+ Name        : void set_task_flags_from_interrupt(void)
+ Input       : 无
+ Output      : 无
+ Description : 由 ADC 中断置位主循环任务标志。
 ---------------------------------------------------------------------------*/
 void set_task_flags_from_interrupt(void)
 {
@@ -588,20 +599,31 @@ void set_task_flags_from_interrupt(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
+ Input       : spc - 本周期采样点数；snap_idx - 与 ct_task 中 s_calc_buf_snap 一致的缓冲写指针快照
+ Output      : 无
+ Description : 从 ua_voltage_buffer 环形区拷贝最近 spc 点到线性 last_ua_voltage_buffer[0..spc-1]，
+               与 grid.c 中 curr_start = (snap + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES 对齐。
+---------------------------------------------------------------------------*/
+static void copy_ua_ring_to_last_ua_linear(uint16_t spc, uint16_t snap_idx)
+{
+    if (spc == 0 || spc > TOTAL_SAMPLES)
+    {
+        return;
+    }
+
+    uint16_t start = (uint16_t)((snap_idx + TOTAL_SAMPLES - spc) % TOTAL_SAMPLES);
+
+    for (uint16_t i = 0; i < spc; i++)
+    {
+        last_ua_voltage_buffer[i] = ua_voltage_buffer[(start + i) % TOTAL_SAMPLES];
+    }
+}
+
 /*---------------------------------------------------------------------------
- Name        : void three_phase_broadcast_task(void)
+ Name        : static void ct_power_calculate_task(void)
  Input       : 无
  Output      : 无
- Description : 处理三相功率及其他广播任务。在状态机完成后执行。
----------------------------------------------------------------------------*/
- Output      : ��
- Description : ���๦�ʼ���������������������ѭ���е��ã���
-               �������������ʷ��������������״�? + ����ʶ����Ч + �����������?
-                        + frequency_valid + !frequency_fault��
-               ʹ�� s_calc_buf_snap ȷ�����ε����������?
-               A/B/C �����ѹ����? last_ua_voltage_buffer[0..spc-1]�����Կ��գ�ȡֵ��
-               ��֤�������ʱ�䴰��ȫ���룬����? buffer_index �ƽ��������λƯ�ơ�?
-               PF = avg_power / (ua_vol_rms * ct_rms_value)���������޷���[-1,1]��
+ Description : 三相有功功率与 PF 计算（与 three_phase_broadcast 等共用 last_ua 线性快照）。
 ---------------------------------------------------------------------------*/
 static void ct_power_calculate_task(void)
 {
@@ -933,6 +955,10 @@ void ADC1_Handler(void) // 50USһ���ж�
         // �����⣺ʹ��δ�˲���ԭʼ��ѹ������ LPF ������λ�ͺ��¹�������ƫ��
         // 2��������ͬ�����жϱ��������㹻�Ŀ������������� LPF
         zero_cross_detect(&sys_param.grid.zero_cross, sys_param.signal.ac_voltage);
+        if (sys_param.grid.zero_cross.zero_cross_detected)
+        {
+            s_zero_crossed_since_wrap = 1;
+        }
 
         // ϵͳ��ʱ������
         system_timer_management();

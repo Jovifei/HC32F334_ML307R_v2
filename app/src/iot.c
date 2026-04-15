@@ -3,8 +3,59 @@
 #include "main.h"
 #include "eeprom.h"
 #include "sub1g.h"
+#include "device_register.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/** 三相 CT 馈网/用电合成功率（与物模型“电网总功率”语义一致的可读近似） */
+static float iot_sum_ct_fix_power(void)
+{
+    return sys_param.ct1.power.fix_dir_power + sys_param.ct2.power.fix_dir_power +
+           sys_param.ct3.power.fix_dir_power;
+}
+
+/** MQTT 上行 JSON 的 id 字段：用主循环 ms 计数，避免依赖不存在的 current_time_ms */
+static uint32_t iot_mqtt_msg_id(void)
+{
+    return sys_param.date_broadcast_counter;
+}
+
+static void iot_copy_first_user_pair_sn(char *dst, size_t dst_sz)
+{
+    if (dst_sz == 0)
+    {
+        return;
+    }
+    dst[0] = '\0';
+    for (uint8_t i = 0; i < USER_PAIR_LIST_MAX_NUM; i++)
+    {
+        if (sys_param.user_pair_list[i].is_valid && sys_param.user_pair_list[i].device_sn[0] != '\0')
+        {
+            strncpy(dst, sys_param.user_pair_list[i].device_sn, dst_sz - 1);
+            dst[dst_sz - 1] = '\0';
+            return;
+        }
+    }
+}
+
+/** 累计并网能量：优先累加已配对微逆 lifetime_energy，否则用 HMI 发电总量(Wh) */
+static float iot_grid_total_lifetime_energy_wh(void)
+{
+    float sum = 0.f;
+    for (uint8_t i = 0; i < INV_DEVICE_MAX_NUM; i++)
+    {
+        if (sys_param.paired_inv_info[i].is_valid)
+        {
+            sum += sys_param.paired_inv_info[i].lifetime_energy;
+        }
+    }
+    if (sum > 0.f)
+    {
+        return sum;
+    }
+    return (float)sys_param.hmi.electricity_generation;
+}
 
 // MQTT JSON消息缓冲区
 static char s_iot_json_buf[512];
@@ -111,7 +162,7 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             i_val = sys_param.paired_inv_info[inv_idx].online_state;
             break;
         case INV_PIID_DEVICE_SN:
-            snprintf(str_val, sizeof(str_val), "%s", sys_param.paired_inv_info[inv_idx].sn);
+            snprintf(str_val, sizeof(str_val), "%s", sys_param.paired_inv_info[inv_idx].device_sn);
             is_string = true;
             break;
         case INV_PIID_SW_VERSION:
@@ -142,28 +193,28 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             i_val = sys_param.paired_inv_info[inv_idx].antiflow_enable;
             break;
         case INV_PIID_INV_POWER_ENABLE:
-            i_val = sys_param.paired_inv_info[inv_idx].inv_power_enable;
+            i_val = sys_param.paired_inv_info[inv_idx].power_enable;
             break;
         case INV_PIID_TODAY_POWER_TIME:
             f_val = sys_param.paired_inv_info[inv_idx].today_power_time;
             break;
         case INV_PIID_FAULT_PARAM:
-            i_val = sys_param.paired_inv_info[inv_idx].fault_param;
+            i_val = (int)sys_param.paired_inv_info[inv_idx].fault_param;
             break;
         case INV_PIID_TEMPERATURE:
-            f_val = sys_param.paired_inv_info[inv_idx].temperature;
+            f_val = sys_param.paired_inv_info[inv_idx].ambient_temperature;
             break;
         case INV_PIID_PV1_VOLTAGE:
-            f_val = sys_param.paired_inv_info[inv_idx].pv1_voltage;
+            f_val = sys_param.paired_inv_info[inv_idx].pv[0].voltage;
             break;
         case INV_PIID_PV1_CURRENT:
-            f_val = sys_param.paired_inv_info[inv_idx].pv1_current;
+            f_val = sys_param.paired_inv_info[inv_idx].pv[0].current;
             break;
         case INV_PIID_PV2_VOLTAGE:
-            f_val = sys_param.paired_inv_info[inv_idx].pv2_voltage;
+            f_val = sys_param.paired_inv_info[inv_idx].pv[1].voltage;
             break;
         case INV_PIID_PV2_CURRENT:
-            f_val = sys_param.paired_inv_info[inv_idx].pv2_current;
+            f_val = sys_param.paired_inv_info[inv_idx].pv[1].current;
             break;
         case INV_PIID_GRID_VOLTAGE:
             f_val = sys_param.paired_inv_info[inv_idx].grid_voltage;
@@ -172,7 +223,7 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             f_val = sys_param.paired_inv_info[inv_idx].grid_frequency;
             break;
         case INV_PIID_POWER_PHASE:
-            i_val = sys_param.paired_inv_info[inv_idx].power_phase;
+            i_val = sys_param.paired_inv_info[inv_idx].phase;
             break;
         case INV_PIID_POWER_LIMIT:
             i_val = sys_param.paired_inv_info[inv_idx].power_limit;
@@ -181,19 +232,19 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             i_val = sys_param.paired_inv_info[inv_idx].connection_point;
             break;
         case INV_PIID_PV1_POWER:
-            i_val = sys_param.paired_inv_info[inv_idx].pv1_power;
+            i_val = sys_param.paired_inv_info[inv_idx].pv[0].power;
             break;
         case INV_PIID_PV2_POWER:
-            i_val = sys_param.paired_inv_info[inv_idx].pv2_power;
+            i_val = sys_param.paired_inv_info[inv_idx].pv[1].power;
             break;
         case INV_PIID_PV3_POWER:
-            i_val = sys_param.paired_inv_info[inv_idx].pv3_power;
+            i_val = sys_param.paired_inv_info[inv_idx].pv[2].power;
             break;
         case INV_PIID_PV4_POWER:
-            i_val = sys_param.paired_inv_info[inv_idx].pv4_power;
+            i_val = sys_param.paired_inv_info[inv_idx].pv[3].power;
             break;
         case INV_PIID_FFT_ENABLE:
-            i_val = sys_param.paired_inv_info[inv_idx].fft_enable;
+            i_val = sys_param.fft_identify.enable_collect;
             break;
         case INV_PIID_PV_NUM:
             i_val = sys_param.paired_inv_info[inv_idx].pv_num;
@@ -205,7 +256,7 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             i_val = sys_param.paired_inv_info[inv_idx].channel_index;
             break;
         case INV_PIID_PACKET_LOSS_RATE:
-            i_val = sys_param.paired_inv_info[inv_idx].packet_loss_rate;
+            i_val = sys_param.paired_inv_info[inv_idx].plr;
             break;
         default:
             return -4003; // property not found
@@ -213,19 +264,28 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
     }
     // CT设备 SIID=1 (设备信息)
     else if (siid == 1) {
+        const device_credentials_t *cred = device_register_get_credentials();
         switch (piid) {
         case 1:
-            snprintf(str_val, sizeof(str_val), "%s", sys_param.device_info.sn);
+            if (cred != NULL)
+            {
+                snprintf(str_val, sizeof(str_val), "%s", cred->device_sn);
+            }
             is_string = true;
             break;
         case 2:
-            i_val = sys_param.device_info.sw_version;
+            snprintf(str_val, sizeof(str_val), "%s", SW_VERSION);
+            is_string = true;
             break;
         case 3:
-            i_val = sys_param.device_info.hw_version;
+            snprintf(str_val, sizeof(str_val), "%s", HW_VERSION);
+            is_string = true;
             break;
         case 4:
-            snprintf(str_val, sizeof(str_val), "%s", sys_param.device_info.product_model);
+            if (cred != NULL)
+            {
+                snprintf(str_val, sizeof(str_val), "%s", cred->product_model);
+            }
             is_string = true;
             break;
         default:
@@ -251,19 +311,19 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             f_val = sys_param.ct_today_energy;
             break;
         case 6:
-            f_val = sys_param.grid_power_all;
+            f_val = iot_sum_ct_fix_power();
             break;
         case 7:
             f_val = sys_param.ct_today_power_time;
             break;
         case 8:
-            f_val = sys_param.grid_total_lifetime_energy;
+            f_val = iot_grid_total_lifetime_energy_wh();
             break;
         case 9:
             i_val = sys_param.is_three_phase;
             break;
         case 10:
-            f_val = sys_param.ct1_power_original;
+            f_val = sys_param.ct1.power.avg_power;
             break;
         case 11:
             f_val = sys_param.ct_today_power_time;
@@ -275,10 +335,10 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             i_val = sys_param.grid.phase_id.sequence_k;
             break;
         case 14:
-            f_val = sys_param.ct2_voltage;
+            f_val = sys_param.grid.ua_vol_rms;
             break;
         case 15:
-            f_val = sys_param.ct3_voltage;
+            f_val = sys_param.grid.ua_vol_rms;
             break;
         case 16:
             f_val = sys_param.grid.ua_vol_rms;
@@ -301,14 +361,14 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             is_string = true;
             break;
         case 5:
-            snprintf(str_val, sizeof(str_val), "%s", sys_param.bind_info.bind_sn);
+            iot_copy_first_user_pair_sn(str_val, sizeof(str_val));
             is_string = true;
             break;
         case 6:
-            i_val = sys_param.bind_info.bind_state;
+            i_val = sys_param.sub1g.state;
             break;
         case 8:
-            i_val = sys_param.phase_type;
+            i_val = (int)sys_param.is_three_phase;
             break;
         case 9:
             i_val = sys_param.fft_identify.is_ffting;
@@ -323,7 +383,7 @@ static int iot_get_single_property_value(char *out, int out_len, int siid, int p
             i_val = sys_param.fft_identify.power;
             break;
         case 14:
-            i_val = sys_param.ct_dir;
+            i_val = (int)sys_param.ct1.power.power_direction;
             break;
         case 15:
             i_val = sys_param.sub1g.channel_index;
@@ -429,13 +489,13 @@ static int iot_set_single_property_value(int siid, int piid, const char *value_s
             sys_param.paired_inv_info[inv_idx].antiflow_enable = (value_str[0] == 't' || value_str[0] == '1');
             break;
         case INV_PIID_INV_POWER_ENABLE:
-            sys_param.paired_inv_info[inv_idx].inv_power_enable = (value_str[0] == 't' || value_str[0] == '1');
+            sys_param.paired_inv_info[inv_idx].power_enable = (value_str[0] == 't' || value_str[0] == '1');
             break;
         case INV_PIID_POWER_LIMIT:
             sys_param.paired_inv_info[inv_idx].power_limit = atoi(value_str);
             break;
         case INV_PIID_FFT_ENABLE:
-            sys_param.paired_inv_info[inv_idx].fft_enable = (value_str[0] == 't' || value_str[0] == '1');
+            sys_param.fft_identify.enable_collect = (value_str[0] == 't' || value_str[0] == '1') ? 1U : 0U;
             break;
         // 其他INV属性为只读
         default:
@@ -702,13 +762,13 @@ static int iot_build_ct_siid2_json(char *buf, int buf_len, int *pos) {
     iot_add_float_property_to_json(buf, buf_len, pos, 2, 5, sys_param.ct_today_energy);
 
     // piid6: 电网总功率
-    iot_add_float_property_to_json(buf, buf_len, pos, 2, 6, sys_param.grid_power_all);
+    iot_add_float_property_to_json(buf, buf_len, pos, 2, 6, iot_sum_ct_fix_power());
 
     // piid7: 今日发电时长
     iot_add_float_property_to_json(buf, buf_len, pos, 2, 7, sys_param.ct_today_power_time);
 
     // piid8: 累计总发电量
-    iot_add_float_property_to_json(buf, buf_len, pos, 2, 8, sys_param.grid_total_lifetime_energy);
+    iot_add_float_property_to_json(buf, buf_len, pos, 2, 8, iot_grid_total_lifetime_energy_wh());
 
     // piid9: 三相标识
     iot_add_property_to_json(buf, buf_len, pos, 2, 9, sys_param.is_three_phase);
@@ -776,19 +836,19 @@ static int iot_build_inv_properties_json(char *buf, int buf_len, int *pos, uint8
 
     // 逆变器使能
     iot_add_property_to_json(buf, buf_len, pos, siid, INV_PIID_INV_POWER_ENABLE,
-        sys_param.paired_inv_info[inv_idx].inv_power_enable);
+        sys_param.paired_inv_info[inv_idx].power_enable);
 
     // 温度
     iot_add_float_property_to_json(buf, buf_len, pos, siid, INV_PIID_TEMPERATURE,
-        sys_param.paired_inv_info[inv_idx].temperature);
+        sys_param.paired_inv_info[inv_idx].ambient_temperature);
 
     // PV1电压
     iot_add_float_property_to_json(buf, buf_len, pos, siid, INV_PIID_PV1_VOLTAGE,
-        sys_param.paired_inv_info[inv_idx].pv1_voltage);
+        sys_param.paired_inv_info[inv_idx].pv[0].voltage);
 
     // PV1电流
     iot_add_float_property_to_json(buf, buf_len, pos, siid, INV_PIID_PV1_CURRENT,
-        sys_param.paired_inv_info[inv_idx].pv1_current);
+        sys_param.paired_inv_info[inv_idx].pv[0].current);
 
     // 电网电压
     iot_add_float_property_to_json(buf, buf_len, pos, siid, INV_PIID_GRID_VOLTAGE,
@@ -814,7 +874,7 @@ static char* iot_build_properties_changed_json(void) {
     // 构造最终JSON
     snprintf(json, sizeof(json),
         "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[%s]}",
-        (int)sys_param.current_time_ms, params);
+        (int)iot_mqtt_msg_id(), params);
     return json;
 }
 
@@ -828,11 +888,11 @@ static char* iot_build_inv_properties_changed_json(uint8_t inv_idx) {
         // 无效设备，返回空params
         snprintf(json, sizeof(json),
             "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[]}",
-            (int)sys_param.current_time_ms);
+            (int)iot_mqtt_msg_id());
     } else {
         snprintf(json, sizeof(json),
             "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[%s]}",
-            (int)sys_param.current_time_ms, params);
+            (int)iot_mqtt_msg_id(), params);
     }
     return json;
 }
@@ -883,7 +943,7 @@ void iot_trigger_ct_report(void) {
         iot_build_ct_siid3_json(params, sizeof(params), &pos);
         snprintf(siid3_json, sizeof(siid3_json),
             "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[%s]}",
-            (int)sys_param.current_time_ms, params);
+            (int)iot_mqtt_msg_id(), params);
         json = siid3_json;
     }
 
@@ -916,7 +976,7 @@ void iot_task(void) {
         iot_tx_flag.immediate_report_bind = 0;
         snprintf(s_iot_json_buf, sizeof(s_iot_json_buf),
             "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[{\"siid\":3,\"piid\":5,\"value\":\"%s\"}]}",
-            (int)sys_param.current_time_ms, s_report_bind_sn);
+            (int)iot_mqtt_msg_id(), s_report_bind_sn);
         iot_publish_properties_changed(s_iot_json_buf);
     }
 
@@ -925,7 +985,7 @@ void iot_task(void) {
         iot_tx_flag.immediate_report_unbind = 0;
         snprintf(s_iot_json_buf, sizeof(s_iot_json_buf),
             "{\"id\":%d,\"method\":\"properties_changed\",\"params\":[{\"siid\":3,\"piid\":6,\"value\":\"%s\"}]}",
-            (int)sys_param.current_time_ms, s_report_bind_sn);
+            (int)iot_mqtt_msg_id(), s_report_bind_sn);
         iot_publish_properties_changed(s_iot_json_buf);
     }
 
