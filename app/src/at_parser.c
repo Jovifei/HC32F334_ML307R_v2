@@ -9,6 +9,9 @@
 // MQTT连接URC结果: -1=待定, 0=成功, 其他=失败码(服务器拒绝等)
 volatile int g_mqtt_conn_result = -1;
 
+// MQTT断开URC结果: -1=未断开, >=0=断开原因码
+volatile int g_mqtt_disc_code = -1;
+
 // MQTT 回调表
 typedef struct {
   mqtt_msg_callback_t cb;
@@ -18,23 +21,12 @@ static mqtt_cb_entry_t s_mqtt_cbs[MQTT_CB_MAX];
 static bool s_urc_registered = false;
 
 /*---------------------------------------------------------------------------
- Name        : mqtt_urc_handler
- Input       : line - URC�����ı���(��\0��β���ַ���)
- Output      : ��
- Description :
- MQTT URC(�������ϱ�)������ں�����
- �ú����� `at_register_urc("+MQTTURC:", ...)`
-ע��󴥷�������ʶ�𲢴�������URC��
- - ���ӳɹ���ʾ��`+MQTTURC: "conn",0,0`
- - ����ȷ����ʾ��`+MQTTURC: "suback"...`
- - ������Ϣ��`+MQTTURC: "message","<topic>",<qos>,<len>,"<data>"`
-
- ��ʶ��������Ϣʱ������� topic/qos/len/payload�������� `s_mqtt_cbs`
-����ע��Ļص��� ������� `mqtt_msg_callback_t(topic, payload, payload_len)`
-�����ϲ�ַ��� ע�⣺
- - payload Ϊ˫���Ű������ַ�����ʽ����ʵ�ְ� `%[^\"]`
-��������֧�ְ���δת�����ŵĸ������ݡ�
- - payload_len ʹ��URC�е� len �ֶΣ�������󳤶Ȳü��Ա��⻺���������
+ Name        : static void mqtt_urc_handler(const char *urc_str)
+ Input       : urc_str - URC字符串
+ Output      : 无
+ Description : MQTT URC（未请求结果码）处理器。
+               处理模块主动上报的MQTT相关事件，如连接、断开、消息等。
+               该函数在中断上下文或后台任务中被调用，需要快速处理。
 ---------------------------------------------------------------------------*/
 static void mqtt_urc_handler(const char *line) {
   if (line == NULL)
@@ -48,6 +40,19 @@ static void mqtt_urc_handler(const char *line) {
       if (conn_id == MQTT_CONN_ID) {
         g_mqtt_conn_result = result_code;
       }
+    }
+    return;
+  }
+
+  // +MQTTURC: "disc",<conn_id>,<code> -> 连接断开通知
+  if (strstr(line, "+MQTTURC: \"disc\"") != NULL) {
+    int conn_id = -1, disc_code = 0;
+    if (sscanf(line, "+MQTTURC: \"disc\",%d,%d", &conn_id, &disc_code) >= 1) {
+      if (conn_id == MQTT_CONN_ID) {
+        g_mqtt_disc_code = disc_code;
+      }
+    } else {
+      g_mqtt_disc_code = 0;
     }
     return;
   }
@@ -76,18 +81,13 @@ static void mqtt_urc_handler(const char *line) {
 }
 
 /*---------------------------------------------------------------------------
- Name        : at_mqtt_config
- Input       : host - MQTT����������/IP
-               port - MQTT�������˿�
-               client_id - �ͻ���ID(ͨ��Ϊ�豸Ψһ��ʶ)
-               username - �û���(��ƽ̨Ҫ����д)
-               password - ����/��Կ(��ƽ̨Ҫ����д)
- Output      : 0=�ɹ�, -1=��ʱ, -2=����(͸���� at_send_command)
- Description :
- ����MQTT���Ӳ���(����һ��������������)��
- ͨ��ƴ�Ӳ�����ģ��AT���� `AT+MQTTCONN=...` д���������ã�������
-`at_mqtt_connect()` ʹ�á� ����ģ�飺`uart_at.c` �ṩ�� `at_send_command()`
-��ɴ��ڷ�������Ӧ�ȴ���
+ Name        : void at_mqtt_config(const char *host, uint16_t port, const char *client_id)
+ Input       : host - MQTT服务器地址
+               port - MQTT服务器端口
+               client_id - 客户端ID
+ Output      : 无
+ Description : MQTT配置。
+               配置MQTT连接参数，包括服务器地址、端口、客户端标识等。
 ---------------------------------------------------------------------------*/
 int at_mqtt_config(const char *host, int port, const char *client_id,
                    const char *username, const char *password) {
@@ -98,14 +98,10 @@ int at_mqtt_config(const char *host, int port, const char *client_id,
 }
 
 /*---------------------------------------------------------------------------
- Name        : at_mqtt_connect
- Input       : ��
- Output      : 0=�ɹ�, -1=��ʱ, -2=����(͸���� at_send_command)
- Description :
- ����MQTT���ӡ�
- ���� `AT+MQTTCONN=<conn_id>`
-����ģ�����ʵ�����Ӷ��������ӳɹ���ģ������ϱ�URC�� ������Ϣ��
-`mqtt_urc_handler()` ������ͨ����ע��ص����͡�
+ Name        : void at_mqtt_connect(void)
+ Input       : 无
+ Output      : 无
+ Description : MQTT连接。发起MQTT连接请求到已配置的服务器。
 ---------------------------------------------------------------------------*/
 int at_mqtt_connect(void) {
   char cmd[64], resp[256];
@@ -114,12 +110,11 @@ int at_mqtt_connect(void) {
 }
 
 /*---------------------------------------------------------------------------
- Name        : at_mqtt_disconnect
- Input       : ��
- Output      : 0=�ɹ�, -1=��ʱ, -2=����(͸���� at_send_command)
- Description :
- �Ͽ�MQTT���ӡ�
- ���� `AT+MQTTDISC=<conn_id>`������ģ�������Ͽ�������������ӡ�
+ Name        : void at_mqtt_disconnect(void)
+ Input       : 无
+ Output      : 无
+ Description : MQTT断开连接。
+               断开与MQTT服务器的连接。
 ---------------------------------------------------------------------------*/
 int at_mqtt_disconnect(void) {
   char cmd[64], resp[256];
@@ -128,14 +123,10 @@ int at_mqtt_disconnect(void) {
 }
 
 /*---------------------------------------------------------------------------
- Name        : at_mqtt_subscribe
- Input       : topic - ��������
-               qos - ����QoS(0/1��ȡ����ģ��/ƽ̨֧��)
- Output      : 0=�ɹ�, -1=��ʱ, -2=����(͸���� at_send_command)
- Description :
- ����ָ��topic��������Ϣ��
- ����
-`AT+MQTTSUB=<conn_id>,"<topic>",<qos>`������ȷ��ͨ����ͨ��URC�ϱ�(suback)��
+ Name        : void at_mqtt_subscribe(const char *topic)
+ Input       : topic - MQTT主题
+ Output      : 无
+ Description : MQTT订阅。订阅指定的MQTT主题以接收消息。
 ---------------------------------------------------------------------------*/
 int at_mqtt_subscribe(const char *topic, int qos) {
   char cmd[256], resp[256];
@@ -145,19 +136,12 @@ int at_mqtt_subscribe(const char *topic, int qos) {
 }
 
 /*---------------------------------------------------------------------------
- Name        : at_mqtt_publish
- Input       : topic - ��������
-               qos - ����QoS(0/1)
-               data - ��������(�ַ���)
-               data_len - ���ݳ���(�ֽ�)
- Output      : 0=�ɹ�, -1=��ʱ, -2=����/�����Ƿ�
- Description :
- ����MQTT��Ϣ��ָ��topic��
- ��ǰʵ�ֽ� payload ��Ϊ�ַ���ƴ��AT���� `AT+MQTTPUB=...,"<data>"` ���͡�
- ע�⣺
- - �� `data` ΪNULL�� `data_len<=0`��ֱ�ӷ��� -2��
- -
-payload�������˫���Ż������ַ���������Ҫ�ϲ�����ת��/���룬����ģ�������ʧ�ܡ�
+ Name        : void at_mqtt_publish(const char *topic, const char *payload)
+ Input       : topic - MQTT主题
+               payload - 消息载荷
+ Output      : 无
+ Description : MQTT发布。
+               向指定主题发布MQTT消息。
 ---------------------------------------------------------------------------*/
 int at_mqtt_publish(const char *topic, int qos, const char *data,
                     int data_len) {
@@ -170,14 +154,11 @@ int at_mqtt_publish(const char *topic, int qos, const char *data,
 }
 
 /*---------------------------------------------------------------------------
- Name        : at_mqtt_register_callback
- Input       : callback - MQTT������Ϣ�ص�����
- Output      : ��
- Description :
- ע��MQTT������Ϣ�ص���
- - ���ص�д�� `s_mqtt_cbs` �Ŀ��в�λ��֧��ע�����ص�(��� MQTT_CB_MAX ��)��
- - �״�ע��ʱ������� `at_register_urc("+MQTTURC:", mqtt_urc_handler)`
-��URC���������� ȷ��ģ���ϱ���MQTT�¼�/��Ϣ�ܹ����������ַ����ص���
+ Name        : void at_mqtt_register_callback(mqtt_callback_t callback)
+ Input       : callback - 回调函数指针
+ Output      : 无
+ Description : 注册MQTT回调函数。
+               注册处理MQTT事件的回调函数。
 ---------------------------------------------------------------------------*/
 void at_mqtt_register_callback(mqtt_msg_callback_t callback) {
   if (callback == NULL)

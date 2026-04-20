@@ -3,6 +3,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "device_register.h"
+#include "iot.h"
 #include "main.h"
 #include "uart_at.h"
 #include <stdio.h>
@@ -34,7 +35,7 @@ x5+/EfAfRODf06WIloS4cVdPaJSVtVnSRo4vZIwNA0Ejbq8QJv/Z0grBwmjbu+La\n\
 1CJZrUyESMdK9axtXhhk7k0GCEtptBc0qaEvLys=\n\
 -----END CERTIFICATE-----\n"
 
-// ��̬���飺�� sizeof(array)-1 �ڱ����ڻ���ֽ���?
+// ��̬���飺�� sizeof(array)-1 �ڱ����ڻ���ֽ���??
 static const char ca_cert_data[] = CA_CERT_DATA;
 
 // �ͻ���˽Կ���ݣ�PEM��ʽ��ÿ��LF��β������ĩβ��\n��
@@ -97,16 +98,10 @@ static const char client_cert_data[] = CLIENT_CERT_DATA;
 static ml307r_state_t s_ml_state = ML307R_STATE_INIT;
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_init
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- ML307R 4Gģ���ʼ��������ִ�����²���?
- 1. ATͨ�Ų���
- 2. �رջ���(ATE0)
- 3. ���SIM��״̬(AT+CPIN?)
- 4. �ȴ�����ע��(AT+CEREG?)�����?30��
- 5. ����PDP����(AT+MIPCALL=1,1)
+ Name        : void ml307r_init(void)
+ Input       : 无
+ Output      : 无
+ Description : ML307R模块初始化。
 ---------------------------------------------------------------------------*/
 int ml307r_init(void)
 {
@@ -114,14 +109,14 @@ int ml307r_init(void)
     char resp[128];
 
     s_ml_state = ML307R_STATE_INIT;
-    DEBUG_4G_PRINTF(" >>> ml307r_init start\r\n");
+    DEBUG_4G_PRINTF(" <<< ml307r_init start\r\n");
 
     // ML307R ������Ҫʱ�䣬�ȵȴ�һ��
-    DEBUG_4G_PRINTF(" >>> Waiting for ML307R to be ready...\r\n");
+    DEBUG_4G_PRINTF(" <<< Waiting for ML307R to be ready...\r\n");
     delay_ms(2000);  // �ȴ�2����ML307R��ȫ����
 
     // 1. AT ͨ�Ų���
-    DEBUG_4G_PRINTF(" >>> AT send: AT\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT\r\n");
     ret = at_send_command("AT", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT resp: %s, ret=%d\r\n", resp, ret);
     if (ret != 0)
@@ -133,7 +128,7 @@ int ml307r_init(void)
     DEBUG_4G_PRINTF(" OK - AT test passed\r\n");
 
     // 2. �رջ��� ATE0
-    DEBUG_4G_PRINTF(" >>> AT send: ATE0\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: ATE0\r\n");
     ret = at_send_command("ATE0", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< ATE0 resp: %s, ret=%d\r\n", resp, ret);
     if (ret != 0)
@@ -144,9 +139,9 @@ int ml307r_init(void)
     }
     DEBUG_4G_PRINTF(" OK - Echo disabled\r\n");
 
-    // 3. ���? SIM �� AT+CPIN?
+    // 3. ���?? SIM �� AT+CPIN?
     s_ml_state = ML307R_STATE_SIM_CHECK;
-    DEBUG_4G_PRINTF(" >>> AT send: AT+CPIN?\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+CPIN?\r\n");
     ret = at_send_command("AT+CPIN?", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+CPIN? resp: %s, ret=%d\r\n", resp, ret);
     if (ret != 0 || strstr(resp, "READY") == NULL)
@@ -158,7 +153,7 @@ int ml307r_init(void)
     DEBUG_4G_PRINTF(" OK - SIM card ready\r\n");
 
     // 4. ��ѯ�ź����� AT+CSQ�������ź� > 18��
-    DEBUG_4G_PRINTF(" >>> AT send: AT+CSQ\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+CSQ\r\n");
     ret = at_send_command("AT+CSQ", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+CSQ resp: %s, ret=%d\r\n", resp, ret);
     if (ret == 0)
@@ -176,7 +171,7 @@ int ml307r_init(void)
     }
 
     // 5. ��ѯ���總��״̬ AT+CGATT?
-    DEBUG_4G_PRINTF(" >>> AT send: AT+CGATT?\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+CGATT?\r\n");
     ret = at_send_command("AT+CGATT?", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+CGATT? resp: %s, ret=%d\r\n", resp, ret);
     if (ret == 0 && strstr(resp, "+CGATT: 1") != NULL)
@@ -184,13 +179,13 @@ int ml307r_init(void)
       DEBUG_4G_PRINTF(" OK - Network attached\r\n");
     }
 
-    // 7. �ȴ�����ע�� AT+CEREG?�����? 30 �Σ�ÿ�� 1s��
+    // 7. �ȴ�����ע�� AT+CEREG?�����?? 30 �Σ�ÿ�� 1s��
     s_ml_state = ML307R_STATE_REGISTERED;
-    DEBUG_4G_PRINTF(" >>> Waiting for network registration (AT+CEREG?)\r\n");
+    DEBUG_4G_PRINTF(" <<< Waiting for network registration (AT+CEREG?)\r\n");
     int retry = 0;
     while (retry < 30)
     {
-      DEBUG_4G_PRINTF(" >>> AT+CEREG? attempt %d/30\r\n", retry + 1);
+      DEBUG_4G_PRINTF(" <<< AT+CEREG? attempt %d/30\r\n", retry + 1);
       ret = at_send_command("AT+CEREG?", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
       DEBUG_4G_PRINTF(" <<< AT+CEREG? resp: %s, ret=%d\r\n", resp, ret);
       if (ret == 0 && (strstr(resp, "+CEREG: 0,1") != NULL ||
@@ -211,7 +206,7 @@ int ml307r_init(void)
 
     // 8. ���� PDP ���� AT+MIPCALL=1,1
     s_ml_state = ML307R_STATE_DIAL;
-    DEBUG_4G_PRINTF(" >>> AT send: AT+MIPCALL=1,1\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+MIPCALL=1,1\r\n");
     ret = at_send_command("AT+MIPCALL=1,1", "OK", AT_TIMEOUT_LONG, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+MIPCALL=1,1 resp: %s, ret=%d\r\n", resp, ret);
     if (ret != 0)
@@ -227,31 +222,22 @@ int ml307r_init(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_get_state
- Input       : ��
- Output      : ml307r_state_t - ��ǰML307Rģ��״̬
- Description :
- ��ȡML307R 4Gģ��ĵ�ǰ״̬��������?
- - ML307R_STATE_INIT: ��ʼ��״̬
- - ML307R_STATE_SIM_CHECK: SIM�����״�?
- - ML307R_STATE_REGISTERED: ������ע��
- - ML307R_STATE_DIAL: PDP����״̬
- - ML307R_STATE_CONNECTED: ���ӳɹ�
- - ML307R_STATE_ERROR: ����״̬
+ Name        : uint8_t ml307r_get_state(void)
+ Input       : 无
+ Output      : ML307R状态
+ Description : 获取ML307R模块状态。
 ---------------------------------------------------------------------------*/
 ml307r_state_t ml307r_get_state(void)
 {
-    DEBUG_4G_PRINTF(" >>> ml307r_get_state: %d\r\n", s_ml_state);
+    DEBUG_4G_PRINTF(" <<< ml307r_get_state: %d\r\n", s_ml_state);
     return s_ml_state;
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_get_signal_quality
- Input       : sq - signal_quality_t�ṹ��ָ�룬��������ź�����?
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- ��ȡML307R 4Gģ����ź�������ͨ��AT+CSQ�����ѯ��?
- ����RSSI(�ź�ǿ��)��BER(������)����������
+ Name        : uint8_t ml307r_get_signal_quality(void)
+ Input       : 无
+ Output      : 信号质量值
+ Description : 获取ML307R信号质量。
 ---------------------------------------------------------------------------*/
 int ml307r_get_signal_quality(signal_quality_t *sq)
 {
@@ -259,7 +245,7 @@ int ml307r_get_signal_quality(signal_quality_t *sq)
       return -1;
     char resp[128];
     int rssi = 99, ber = 99;
-    DEBUG_4G_PRINTF(" >>> AT send: AT+CSQ\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+CSQ\r\n");
     int ret = at_send_command("AT+CSQ", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+CSQ resp: %s, ret=%d\r\n", resp, ret);
     if (ret == 0)
@@ -273,12 +259,10 @@ int ml307r_get_signal_quality(signal_quality_t *sq)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_is_arrears
- Input       : ��
- Output      : true=Ƿ��(�ź�������δע��), false=����
- Description :
- �ж�ML307Rģ���Ƿ���Ƿ��״̬��
- ������RSSI��10-31��Χ��(�ź�����)����״̬������ע��/����/�����С�
+ Name        : uint8_t ml307r_is_arrears(void)
+ Input       : 无
+ Output      : 欠费状态
+ Description : 检查是否欠费。
 ---------------------------------------------------------------------------*/
 bool ml307r_is_arrears(void)
 {
@@ -293,23 +277,17 @@ bool ml307r_is_arrears(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_reconnect
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- ML307R 4Gģ���������Ӻ�����
- ִ�����²��裺
- 1. �ر���Ƶ����(AT+CFUN=0)
- 2. ������Ƶ����(AT+CFUN=1)
- 3. �ȴ���������ע��(AT+CEREG?)�����?30��
- 4. ���¼���PDP����(AT+MIPCALL=1,1)
+ Name        : void ml307r_reconnect(void)
+ Input       : 无
+ Output      : 无
+ Description : ML307R重新连接。
 ---------------------------------------------------------------------------*/
 int ml307r_reconnect(void)
 {
     char resp[128];
-    DEBUG_4G_PRINTF(" >>> ml307r_reconnect start\r\n");
+    DEBUG_4G_PRINTF(" <<< ml307r_reconnect start\r\n");
 
-    DEBUG_4G_PRINTF(" >>> AT send: AT+CFUN=0\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+CFUN=0\r\n");
     int ret0 = at_send_command("AT+CFUN=0", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+CFUN=0 resp: %s, ret=%d, err=%d(%s)\r\n",
                     resp, ret0, at_get_last_error_code(), at_get_last_error_line());
@@ -319,7 +297,7 @@ int ml307r_reconnect(void)
     }
     delay_ms(500);
 
-    DEBUG_4G_PRINTF(" >>> AT send: AT+CFUN=1\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+CFUN=1\r\n");
     int ret1 = at_send_command("AT+CFUN=1", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+CFUN=1 resp: %s, ret=%d, err=%d(%s)\r\n",
                     resp, ret1, at_get_last_error_code(), at_get_last_error_line());
@@ -332,7 +310,7 @@ int ml307r_reconnect(void)
     int retry = 0;
     while (retry < 30)
     {
-      DEBUG_4G_PRINTF(" >>> AT+CEREG? reconnect attempt %d/30\r\n", retry + 1);
+      DEBUG_4G_PRINTF(" <<< AT+CEREG? reconnect attempt %d/30\r\n", retry + 1);
       int ret = at_send_command("AT+CEREG?", "OK", AT_TIMEOUT_DEFAULT, resp, sizeof(resp));
       DEBUG_4G_PRINTF(" <<< AT+CEREG? resp: %s, ret=%d\r\n", resp, ret);
       if (ret == 0 && (strstr(resp, "+CEREG: 0,1") != NULL ||
@@ -352,7 +330,7 @@ int ml307r_reconnect(void)
     }
 
     s_ml_state = ML307R_STATE_REGISTERED;
-    DEBUG_4G_PRINTF(" >>> AT send: AT+MIPCALL=1,1\r\n");
+    DEBUG_4G_PRINTF(" <<< AT send: AT+MIPCALL=1,1\r\n");
     int ret = at_send_command("AT+MIPCALL=1,1", "OK", AT_TIMEOUT_LONG, resp, sizeof(resp));
     DEBUG_4G_PRINTF(" <<< AT+MIPCALL=1,1 resp: %s, ret=%d\r\n", resp, ret);
     if (ret != 0)
@@ -372,19 +350,19 @@ int ml307r_reconnect(void)
 static mqtt_state_t s_mqtt_state = MQTT_STATE_DISCONNECTED;
 static char s_topic_up[64] = {0};
 static char s_topic_down[64] = {0};
+static mqtt_downlink_cb s_mqtt_downlink_cb = NULL;
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_connect
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- MQTT�ͻ������Ӻ���
+ Name        : void ml307r_mqtt_connect(void)
+ Input       : 无
+ Output      : 无
+ Description : MQTT连接。
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_connect(void)
 {
     int ret;
     s_mqtt_state = MQTT_STATE_CONNECTING;
-    DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_connect start\r\n");
+    DEBUG_4G_PRINTF("[MQTT] <<< ml307r_mqtt_connect start\r\n");
 
     // ��ȡ�豸ƾ��
     const device_credentials_t *cred = device_register_get_credentials();
@@ -402,7 +380,7 @@ int ml307r_mqtt_connect(void)
     DEBUG_4G_PRINTF("[MQTT] Topic down: %s\r\n", s_topic_down);
 
     // ʹ�ö�̬ƾ������ MQTT
-    DEBUG_4G_PRINTF("[MQTT] >>> at_mqtt_config\r\n");
+    DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_config\r\n");
     ret = at_mqtt_config(MQTT_SERVER, MQTT_PORT, cred->device_sn, cred->device_id, cred->device_key);
     DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_config ret=%d\r\n", ret);
     if (ret != 0)
@@ -413,7 +391,7 @@ int ml307r_mqtt_connect(void)
     }
     DEBUG_4G_PRINTF("[MQTT] OK - MQTT config done\r\n");
 
-    DEBUG_4G_PRINTF("[MQTT] >>> at_mqtt_connect\r\n");
+    DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_connect\r\n");
     ret = at_mqtt_connect();
     DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_connect ret=%d\r\n", ret);
     if (ret != 0)
@@ -424,7 +402,7 @@ int ml307r_mqtt_connect(void)
     }
     DEBUG_4G_PRINTF("[MQTT] OK - MQTT connected\r\n");
 
-    DEBUG_4G_PRINTF("[MQTT] >>> at_mqtt_subscribe: %s\r\n", s_topic_down);
+    DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_subscribe: %s\r\n", s_topic_down);
     ret = at_mqtt_subscribe(s_topic_down, 1);
     DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_subscribe ret=%d\r\n", ret);
     if (ret != 0)
@@ -441,15 +419,14 @@ int ml307r_mqtt_connect(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_disconnect
- Input       : ��
- Output      : 0=�ɹ�, -1=ʧ��
- Description :
- MQTT�ͻ��˶Ͽ����Ӻ���
+ Name        : void ml307r_mqtt_disconnect(void)
+ Input       : 无
+ Output      : 无
+ Description : MQTT断开连接。
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_disconnect(void)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_disconnect\r\n");
+    DEBUG_4G_PRINTF("[MQTT] <<< ml307r_mqtt_disconnect\r\n");
     int ret = at_mqtt_disconnect();
     DEBUG_4G_PRINTF("[MQTT] <<< at_mqtt_disconnect ret=%d\r\n", ret);
     s_mqtt_state = MQTT_STATE_DISCONNECTED;
@@ -457,33 +434,54 @@ int ml307r_mqtt_disconnect(void)
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_publish
- Input       : topic - ����
-                 payload - ��Ϣ�غ�
-                 qos - ���������ȼ�(0/1)
- Output      : at_mqtt_publish�ķ���ֵ
- Description :
- MQTT������Ϣ�����������ݷ�����ָ������
+ Name        : void ml307r_mqtt_publish(const char *topic, const char *payload)
+ Input       : topic - MQTT主题
+               payload - 消息载荷
+ Output      : 无
+ Description : MQTT发布消息。
 ---------------------------------------------------------------------------*/
 int ml307r_mqtt_publish(const char *topic, const char *payload, int qos)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_publish: topic=%s, qos=%d, payload=%s\r\n", topic, qos, payload);
+    DEBUG_4G_PRINTF("[MQTT] <<< ml307r_mqtt_publish: topic=%s, qos=%d, payload=%s\r\n", topic, qos, payload);
     int ret = at_mqtt_publish(topic, qos, payload, (int)strlen(payload));
     DEBUG_4G_PRINTF("[MQTT] <<< ml307r_mqtt_publish ret=%d\r\n", ret);
     return ret;
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_mqtt_get_state
- Input       : ��
- Output      : mqtt_state_t - ��ǰMQTT����״̬
- Description :
- ��ȡMQTT�ͻ��˵ĵ�ǰ״̬
+ Name        : uint8_t ml307r_mqtt_get_state(void)
+ Input       : 无
+ Output      : MQTT状态
+ Description : 获取MQTT连接状态。
 ---------------------------------------------------------------------------*/
 mqtt_state_t ml307r_mqtt_get_state(void)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> ml307r_mqtt_get_state: %d\r\n", s_mqtt_state);
+    DEBUG_4G_PRINTF("[MQTT] <<< ml307r_mqtt_get_state: %d\r\n", s_mqtt_state);
     return s_mqtt_state;
+}
+
+/*---------------------------------------------------------------------------
+ Name        : ml307r_mqtt_set_downlink_callback
+ Input       : cb - downlink callback
+ Output      : none
+ Description :
+ Set MQTT downlink message callback
+---------------------------------------------------------------------------*/
+void ml307r_mqtt_set_downlink_callback(mqtt_downlink_cb cb)
+{
+    s_mqtt_downlink_cb = cb;
+}
+
+/*---------------------------------------------------------------------------
+ Name        : ml307r_mqtt_is_connected
+ Input       : none
+ Output      : true=connected, false=disconnected
+ Description :
+ Check if MQTT is connected
+---------------------------------------------------------------------------*/
+bool ml307r_mqtt_is_connected(void)
+{
+    return s_mqtt_state == MQTT_STATE_CONNECTED;
 }
 
 // ==================== �ƶ���Ϣ���� ====================
@@ -494,12 +492,10 @@ static void on_mqtt_message(const char *topic, const char *payload, int len);
 static int s_mqtt_msg_id = 0;
 
 /*---------------------------------------------------------------------------
- Name        : publish_device_info
- Input       : ��
- Output      : ��
- Description :
- �ϱ��豸��Ϣ���ƶˡ�
- �����豸SN����Ʒ�ͺš�MCU�汾��RSSI�ź�ǿ�ȡ�
+ Name        : void publish_device_info(void)
+ Input       : 无
+ Output      : 无
+ Description : 发布设备信息。
 ---------------------------------------------------------------------------*/
 static void publish_device_info(void)
 {
@@ -510,17 +506,15 @@ static void publish_device_info(void)
              "\"sn\":\"%s\",\"product_model\":\"%s\","
              "\"mcu_version\":\"%s\",\"rssi\":-63}}",
              s_mqtt_msg_id++, cred->device_sn, cred->product_model, SW_VERSION);
-    DEBUG_4G_PRINTF("[MQTT] >>> publish_device_info: %s\r\n", payload);
+    DEBUG_4G_PRINTF("[MQTT] <<< publish_device_info: %s\r\n", payload);
     ml307r_mqtt_publish(s_topic_up, payload, 0);
 }
 
 /*---------------------------------------------------------------------------
- Name        : publish_ct_power
- Input       : ��
- Output      : ��
- Description :
- �ϱ�CT�������ݵ��ƶˡ�
- ������һ·CT�й����ʺ͵����ۼƷ�������
+ Name        : void publish_ct_power(void)
+ Input       : 无
+ Output      : 无
+ Description : 发布CT功率信息。
 ---------------------------------------------------------------------------*/
 static void publish_ct_power(void)
 {
@@ -531,7 +525,7 @@ static void publish_ct_power(void)
              "{\"siid\":4,\"piid\":8,\"value\":%.1f}]}",
              s_mqtt_msg_id++, sys_param.ct1.power.avg_power,
              sys_param.ct_today_energy);
-    DEBUG_4G_PRINTF("[MQTT] >>> publish_ct_power: %s\r\n", payload);
+    DEBUG_4G_PRINTF("[MQTT] <<< publish_ct_power: %s\r\n", payload);
     ml307r_mqtt_publish(s_topic_up, payload, 0);
 }
 
@@ -546,22 +540,10 @@ typedef struct
 } prop_item_t;
 
 /*---------------------------------------------------------------------------
- Name        : parse_params
- Input       : json  - JSON�ַ���(���� "params":[{...},...] �ı���)
-                 items - ������飬���ڱ����������(siids/piid/value)��
-                 max_n - items�����������?
- Output      : ʵ�ʽ�����������(0��ʾδ���������ʽ��ƥ��?)
- Description :
- ���ƶ�����JSON�����н��� "params" �����ֶΣ���ȡÿһ��ģ�?
- - siid / piid
- - value(��ѡ)��ͳһ����Ϊ�ַ��� `value_str`������λ `has_value`
- ��;��
- - `handle_get_properties()`������ get_properties �������?(siids/piid)
- - `handle_set_properties()`������ set_properties �������?(siids/piid/value)
- ˵�������ƣ�
- - ��ʵ��Ϊ�������ַ���ɨ��/��ȡ������ͨ��JSON������
- - ��֧�� value
-Ϊ��������/�����ŵȷָ����ļ�ֵ(����/����/�������ŵ�Ƭ��)������JSON���ϲ����д���
+ Name        : void parse_params(cJSON *params)
+ Input       : params - JSON参数对象
+ Output      : 无
+ Description : 解析MQTT消息中的参数。
 ---------------------------------------------------------------------------*/
 static int parse_params(const char *json, prop_item_t *items, int max_n)
 {
@@ -613,11 +595,10 @@ static int parse_params(const char *json, prop_item_t *items, int max_n)
 }
 
 /*---------------------------------------------------------------------------
- Name        : parse_msg_id
- Input       : json - JSON�ַ���(���� "id":xxx �ֶ�)
- Output      : id��ֵ(����ʧ�ܷ���0)
- Description :
- ���ƶ�����JSON��������ȡ "id" �ֶΣ��������ɶ�Ӧ�� result ��Ӧ���ġ�
+ Name        : uint32_t parse_msg_id(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 消息ID
+ Description : 解析消息ID。
 ---------------------------------------------------------------------------*/
 static int parse_msg_id(const char *json)
 {
@@ -630,23 +611,14 @@ static int parse_msg_id(const char *json)
 // ==================== ���Զ�ȡ��get_properties�� ====================
 
 /*---------------------------------------------------------------------------
- Name        : handle_get_properties
- Input       : buf    - ����JSON�����ַ���
-                 msg_id - ����ID(����Ӧ��ƥ��)
- Output      : ��
- Description :
- �����ƶ� "get_properties" ����
- ��Ϊ��
- - ���� `parse_params()` ���� params ���飬��ȡ�����? siid/piid �б�
- - ���ݱ����̶����SIID/PIIDӳ�䣬��ȡ��Ӧ���������ݲ���װ result ��Ӧ��
-     - SIID=1���豸��Ϣ(�ͺš�SN�������汾��)
-     - SIID=2��CT/��������(���ʡ���������ѹ��Ƶ�ʡ������?)
- - ��֧�ֻ򲻴��ڵ����Է��� code=-4004
- - ͨ�� `ml307r_mqtt_publish()` ����Ӧ����������Topic
+ Name        : void handle_get_properties(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 无
+ Description : 处理获取属性请求。
 ---------------------------------------------------------------------------*/
 static void handle_get_properties(const char *buf, int msg_id)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> handle_get_properties: msg_id=%d, buf=%s\r\n", msg_id, buf);
+    DEBUG_4G_PRINTF("[MQTT] <<< handle_get_properties: msg_id=%d, buf=%s\r\n", msg_id, buf);
     prop_item_t items[16];
     int n = parse_params(buf, items, 16);
     if (n == 0)
@@ -743,23 +715,14 @@ static void handle_get_properties(const char *buf, int msg_id)
 // ==================== ����д�루set_properties�� ====================
 
 /*---------------------------------------------------------------------------
- Name        : handle_set_properties
- Input       : buf    - ����JSON�����ַ���
-                 msg_id - ����ID(����Ӧ��ƥ��)
- Output      : ��
- Description :
- �����ƶ� "set_properties" ����
- ��ǰʵ�֣�
- - ���� params ���飬��ȡ siid/piid/value
- - ����������չ��ܣ�Ĭ������д�����? code=-4004(���Բ�����/����д)
- - ͨ�� `ml307r_mqtt_publish()` ���� result Ӧ��
- ������չ���飺
- -
-�ڴ˴���SIID/PIIDʵ�ֿ�д���ԣ����翪������У׼����������ģʽ�ȣ������÷�Χ/Ȩ��У��
+ Name        : void handle_set_properties(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 无
+ Description : 处理设置属性请求。
 ---------------------------------------------------------------------------*/
 static void handle_set_properties(const char *buf, int msg_id)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> handle_set_properties: msg_id=%d, buf=%s\r\n", msg_id, buf);
+    DEBUG_4G_PRINTF("[MQTT] <<< handle_set_properties: msg_id=%d, buf=%s\r\n", msg_id, buf);
     prop_item_t items[16];
     int n = parse_params(buf, items, 16);
     if (n == 0)
@@ -794,17 +757,11 @@ static void handle_set_properties(const char *buf, int msg_id)
 // ==================== ʱ��ͬ�� ====================
 
 /*---------------------------------------------------------------------------
- Name        : timestamp_to_datetime
- Input       : ts       - Unixʱ���?(��)
-                 tz_hours - ʱ��ƫ��(Сʱ�����綫����=8.0)
-                 out      - ����ַ���������?
-                 out_len  - �������������?
- Output      : ��
- Description :
- ��Unixʱ���ת��Ϊ����ʱ���ַ���? "YYYY-MM-DD HH:MM:SS"��
- ʵ���ص㣺
- - ������ time.h��ʹ�ü򵥵�����/�·���������
- - ���Ƚ�ʱ�����ʱ��ƫ����������ת��?
+ Name        : void timestamp_to_datetime(uint32_t timestamp, char *datetime_str)
+ Input       : timestamp - 时间戳
+               datetime_str - 日期时间字符串
+ Output      : 无
+ Description : 时间戳转换为日期时间。
 ---------------------------------------------------------------------------*/
 static void timestamp_to_datetime(long ts, float tz_hours, char *out, int out_len)
 {
@@ -845,19 +802,14 @@ static void timestamp_to_datetime(long ts, float tz_hours, char *out, int out_le
 }
 
 /*---------------------------------------------------------------------------
- Name        : handle_time_sync
- Input       : buf - ����JSON�����ַ���(���� timestamp/timezone �ֶ�)
- Output      : ��
- Description :
- �����ƶ� "time" ͬ����Ϣ��
- ��Ϊ��
- - ���� "timestamp" ���ѡ��? "timezone"
- - ���� `timestamp_to_datetime()` �õ�����ʱ���ַ���
- - ���� `sys_param.time` �е� date_time/date/time/today_date ���ֶ�
+ Name        : void handle_time_sync(cJSON *root)
+ Input       : root - JSON根对象
+ Output      : 无
+ Description : 处理时间同步请求。
 ---------------------------------------------------------------------------*/
 static void handle_time_sync(const char *buf)
 {
-    DEBUG_4G_PRINTF("[MQTT] >>> handle_time_sync: buf=%s\r\n", buf);
+    DEBUG_4G_PRINTF("[MQTT] <<< handle_time_sync: buf=%s\r\n", buf);
     const char *p = strstr(buf, "\"timestamp\":");
     if (!p)
       return;
@@ -886,25 +838,22 @@ static void handle_time_sync(const char *buf)
 // ==================== ����Ϣ�ַ� ====================
 
 /*---------------------------------------------------------------------------
- Name        : on_mqtt_message
- Input       : topic   - ����topic
-                 payload - ����payload�ַ���
-                 len     - payload����
- Output      : ��
- Description :
- MQTT������Ϣͳһ��ڻص�?(�� `at_mqtt_register_callback()` ע��)��
- ��Ϊ��
- - ����payload������buf��ȷ��\0��β
- - ���� method �� id �ֶ�
- - �� method �ַ�����Ӧ����������
-     - get_properties -> `handle_get_properties()`
-     - set_properties -> `handle_set_properties()`
-     - time -> `handle_time_sync()`
-     - ota_start -> Ԥ��(��ǰδʵ��)
+ Name        : void on_mqtt_message(const char *topic, const char *payload)
+ Input       : topic - MQTT主题
+               payload - 消息载荷
+ Output      : 无
+ Description : MQTT消息回调处理。
 ---------------------------------------------------------------------------*/
 static void on_mqtt_message(const char *topic, const char *payload, int len)
 {
     (void)topic;
+    // If it is a down topic, invoke downlink callback
+    // Note: s_mqtt_downlink_cb (iot_mqtt_downlink_handler) handles get_properties,
+    // set_properties, and action - no direct handling needed here
+    if (strstr(topic, "down") != NULL && s_mqtt_downlink_cb != NULL)
+    {
+        s_mqtt_downlink_cb(topic, payload);
+    }
     char buf[512];
     if (len < 0)
       len = 0;
@@ -913,7 +862,7 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
     strncpy(buf, payload, (size_t)len);
     buf[len] = '\0';
 
-    DEBUG_4G_PRINTF("[MQTT] >>> on_mqtt_message: topic=%s, len=%d, payload=%s\r\n", topic, len, buf);
+    DEBUG_4G_PRINTF("[MQTT] <<< on_mqtt_message: topic=%s, len=%d, payload=%s\r\n", topic, len, buf);
 
     char method[32] = {0};
     const char *m = strstr(buf, "\"method\":\"");
@@ -930,15 +879,7 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
     int msg_id = parse_msg_id(buf);
     DEBUG_4G_PRINTF("[MQTT] method=%s, msg_id=%d\r\n", method, msg_id);
 
-    if (strcmp(method, "get_properties") == 0)
-    {
-      handle_get_properties(buf, msg_id);
-    }
-    else if (strcmp(method, "set_properties") == 0)
-    {
-      handle_set_properties(buf, msg_id);
-    }
-    else if (strcmp(method, "time") == 0)
+    if (strcmp(method, "time") == 0)
     {
       handle_time_sync(buf);
     }
@@ -956,44 +897,45 @@ static void on_mqtt_message(const char *topic, const char *payload, int len)
 
 // ML307R ��ʼ����״̬
 typedef enum {
-    ML_SUB_AT,           // �׶�1: ATͨ�Ų���
-    ML_SUB_ATE0,         // �׶�1: �رջ���
-    ML_SUB_CPIN,         // �׶�1: ���SIM��
-    ML_SUB_CSQ,          // �׶�1: ��ѯ�ź�����
-    ML_SUB_CEREG,        // �׶�1: �ȴ�����ע��
-    ML_SUB_CEREG_WAIT,    // �׶�1: ���Լ���ȴ�?
-    ML_SUB_MIPCALL,       // 阶段1: 激活PDP
-    ML_SUB_MIPCALL_DEACT, // 阶段1: 去激活PDP（CME ERROR 50后重试）
-    ML_SUB_CERT_CA,       // �׶�2: д��CA֤��
-    ML_SUB_CERT_KEY,      // �׶�3: д��ͻ���˽�?
-    ML_SUB_CERT_DEV,      // �׶�3: д��ͻ���֤��?
-    ML_SUB_HTTPS_CHECK,    // 阶段4: 检查是否已有凭�??
-    ML_SUB_HTTPS_SSL_CFG,  // 阶段4: SSL单向认证配置
-    ML_SUB_HTTPS_CREATE,   // 阶段4: 创建HTTP实例
-    ML_SUB_HTTPS_HEADER,   // 阶段4: 配置HTTP�??
-    ML_SUB_HTTPS_CONTENT,  // 阶段4: 发送JSON body（第一步：发header�?
-    ML_SUB_HTTPS_CONTENT2, // 阶段4: 发送JSON body（第二步：发MHTTPCONTENT命令�?
-    ML_SUB_HTTPS_CONTENT3, // 阶段4: 发送JSON body（第三步：等�?>并发送body�?
-    ML_SUB_HTTPS_REQUEST,  // 阶段4: 发送HTTP POST请求
-    ML_SUB_HTTPS_WAIT_URC, // 阶段4: 等待URC响应(解析device_id/key)
-    ML_SUB_HTTPS_CLEANUP,  // 阶段4: 删除HTTP实例
-    ML_SUB_SSL_AUTH,      // �׶�5: SSL˫����֤
-    ML_SUB_SSL_AUTH_WAIT,  // 阶段5: 等待SSL证书绑定完成
-    ML_SUB_SSL_AUTH_WAIT2, // 阶段5: 等待双向认证设置完成
-    ML_SUB_MQTT_CONN,          // 阶段6: MQTT连接（发SSL配置）
-    ML_SUB_MQTT_CONN_WAIT1,    // 阶段6: 等待keepalive设置完成
-    ML_SUB_MQTT_CONN_WAIT2,    // 阶段6: 等待clean设置完成，发AT+MQTTCONN
-    ML_SUB_MQTT_SUB,           // 阶段6: 等待AT+MQTTCONN模组接受(OK)
-    ML_SUB_MQTT_CONN_URC_WAIT, // 阶段6: 等待+MQTTURC:"conn"确认实际连接
-    ML_SUB_MQTT_SUB_WAIT,      // 阶段7: 已订阅，等待AT+MQTTSUB完成
-    ML_SUB_DONE,               // 全部完成
+    ML_SUB_AT,           // ???1: AT??????
+    ML_SUB_ATE0,         // ???1: ??????
+    ML_SUB_CPIN,         // ???1: ???SIM??
+    ML_SUB_CSQ,          // ???1: ????�?????
+    ML_SUB_CEREG,        // ???1: ??????????
+    ML_SUB_CEREG_WAIT,    // ???1: ??????????
+    ML_SUB_CEREG_DELAY,  // ??1: ????????3s?????
+    ML_SUB_MIPCALL,       // ??1: ??PDP
+    ML_SUB_MIPCALL_DEACT, // ??1: ???PDP?CME ERROR 50????
+    ML_SUB_CERT_CA,       // ???2: ???CA???
+    ML_SUB_CERT_KEY,      // ???3: ??????????
+    ML_SUB_CERT_DEV,      // ???3: ???????????
+    ML_SUB_HTTPS_CHECK,    // ??4: ??????????
+    ML_SUB_HTTPS_SSL_CFG,  // ??4: SSL??????
+    ML_SUB_HTTPS_CREATE,   // ??4: ??HTTP??
+    ML_SUB_HTTPS_HEADER,   // ??4: ??HTTP???
+    ML_SUB_HTTPS_CONTENT,  // ??4: ??JSON body??????header??
+    ML_SUB_HTTPS_CONTENT2, // ??4: ??JSON body??????MHTTPCONTENT????
+    ML_SUB_HTTPS_CONTENT3, // ??4: ??JSON body????????>???body??
+    ML_SUB_HTTPS_REQUEST,  // ??4: ??HTTP POST??
+    ML_SUB_HTTPS_WAIT_URC, // ??4: ??URC??(??device_id/key)
+    ML_SUB_HTTPS_CLEANUP,  // ??4: ??HTTP??
+    ML_SUB_SSL_AUTH,      // ???5: SSL??????
+    ML_SUB_SSL_AUTH_WAIT,  // ??5: ??SSL??????
+    ML_SUB_SSL_AUTH_WAIT2, // ??5: ??????????
+    ML_SUB_MQTT_CONN,          // ??6: MQTT????SSL???
+    ML_SUB_MQTT_CONN_WAIT1,    // ??6: ??keepalive????
+    ML_SUB_MQTT_CONN_WAIT2,    // ??6: ??clean??????AT+MQTTCONN
+    ML_SUB_MQTT_SUB,           // ??6: ??AT+MQTTCONN????(OK)
+    ML_SUB_MQTT_CONN_URC_WAIT, // ??6: ??+MQTTURC:"conn"??????
+    ML_SUB_MQTT_SUB_WAIT,      // ??7: ??????AT+MQTTSUB??
+    ML_SUB_DONE,               // ????
 } ml_sub_state_t;
 
 // ֤��д����״̬�������������ͣ�
 typedef enum {
     CERT_STEP_CMD,        // ��������ͷ���ȴ�>
     CERT_STEP_DATA,       // �ȴ�>����֤������
-    CERT_STEP_WAIT_OK,    // �ȴ�д�����?(OK)
+    CERT_STEP_WAIT_OK,    // �ȴ�д�����??(OK)
 } cert_step_t;
 
 // ��̬����
@@ -1001,24 +943,40 @@ static ml_sub_state_t s_ml_sub_state = ML_SUB_AT;
 static uint32_t s_wait_until = 0;
 static uint8_t s_init_done = 0;
 static uint8_t s_cereg_retry = 0;
-static int s_cereg_stat = -1;              // +CEREG: <n>,<stat> 中的 stat 字段（1=home, 5=roaming）
+static int s_cereg_stat = -1;              // +CEREG: <n>,<stat> 中的 stat 字段�?1=home, 5=roaming�?
 static cert_step_t s_cert_step = CERT_STEP_CMD;  // 证书写入步骤
 static uint32_t s_cert_wait_start = 0;            // 证书等待计时起点
 
-// HTTPS注册状态机用静态变量
-static uint8_t s_https_reg_done = 0;              // HTTPS注册完成标志(device_id/key已解析)
-static uint8_t s_urc_registered = 0;              // URC回调已注册标志
-static uint8_t s_dev_reg_init = 0;                // device_register模块已初始化标志
-static uint32_t s_https_body_len = 0;             // JSON body字节长度
-static char s_reg_device_id[32];                  // 解析出的device_id
-static char s_reg_device_key[64];                 // 解析出的device_key
-static char s_json_body[256];                     // JSON body缓冲区（用于HTTPS注册）
+// HTTPS??????????
+static uint8_t s_https_reg_done = 0;              // HTTPS??????(device_id/key???)
+static uint8_t s_urc_registered = 0;              // URC???????
+static uint8_t s_dev_reg_init = 0;                // device_register????????
+static uint32_t s_https_body_len = 0;             // JSON body????
+static char s_reg_device_id[32];                  // ????device_id
+static char s_reg_device_key[64];                 // ????device_key
+static char s_json_body[256];                     // JSON body??????HTTPS???
 
-// MQTT重连状态
-static uint8_t s_mqtt_retry = 0;                  // MQTT连接重试次数（超限后全量重启）
-static uint32_t s_mqtt_urc_wait_start = 0;        // 等待MQTT conn URC的计时起点
+// CEREG????
+static uint32_t s_cereg_delay_start = 0;          // CEREG????????
 
-// 等待一段时间（毫秒，非阻塞�??
+// MQTT????
+static uint8_t s_mqtt_retry = 0;                  // MQTT???????????????
+static uint32_t s_mqtt_urc_wait_start = 0;        // ??MQTT conn URC?????
+
+// ????????
+typedef enum {
+    RUN_IDLE,              // ???????????
+    RUN_PUB_WAIT_PROMPT,   // ??AT+MQTTPUB????? > ???
+    RUN_PUB_WAIT_OK,       // ??payload??? OK ??
+} run_pub_state_t;
+static run_pub_state_t s_run_pub_state = RUN_IDLE;
+static char s_run_payload[512];                    // ????payload
+static int s_run_payload_len = 0;                  // payload????
+static uint32_t s_run_pub_start = 0;               // ????????
+static uint32_t s_run_last_info_pub = 0;           // ??????????
+static uint32_t s_run_last_power_pub = 0;          // ??CT??????
+
+// 等待一段时间（毫秒，非阻塞�???
 // 返回1=等待结束, 0=还在等待
 static int ml_wait_ms(uint32_t ms)
 {
@@ -1035,28 +993,28 @@ static int ml_wait_ms(uint32_t ms)
     return 0;
 }
 
-// ==================== URC回调：解�?? device_id / device_key ====================
+// ==================== URC回调：解�??? device_id / device_key ====================
 
-// URC回调：解�?? +MHTTPURC "content" 响应中的 device_id �?? device_key
+// URC回调：解�??? +MHTTPURC "content" 响应中的 device_id �??? device_key
 static void https_urc_callback(const char *line)
 {
     if (s_https_reg_done)
-        return; // 已解析过，跳�??
+        return; // 已解析过，跳�???
 
-    // 调试：打印收到的 URC �?
+    // 调试：打印收到的 URC �??
     DEBUG_4G_PRINTF(" DBG URC: [%s]\r\n", line);
 
     // JSON 格式：{"code":0,"msg":"OK","data":{"device_key":"xxx","device_id":"yyy"}}
-    // device_key 和 device_id 的顺序不固定，各自从 line 头部独立搜索
+    // device_key �? device_id 的顺序不固定，各自从 line 头部独立搜索
 
-    // 提取 device_id（"device_id":"<value>"）
-    // "device_id":"  共13个字符
+    // 提取 device_id�?"device_id":"<value>"�?
+    // "device_id":"  �?13个字�?
     const char *p = strstr(line, "\"device_id\":\"");
     if (p == NULL) {
         DEBUG_4G_PRINTF(" DBG URC: device_id pattern not found\r\n");
         return;
     }
-    p += 13; // 跳过 "device_id":" (13个字符，使 p 指向值的第一个字符)
+    p += 13; // 跳过 "device_id":" (13个字符，�? p 指向值的第一个字�?)
     const char *end = strchr(p, '"');
     if (end == NULL || end <= p) {
         DEBUG_4G_PRINTF(" DBG URC: device_id end quote not found\r\n");
@@ -1069,14 +1027,14 @@ static void https_urc_callback(const char *line)
     memcpy(s_reg_device_id, p, len);
     s_reg_device_id[len] = '\0';
 
-    // 提取 device_key（"device_key":"<value>"）从 line 开头搜索（顺序无关）
-    // "device_key":"  共14个字符
+    // 提取 device_key�?"device_key":"<value>"）从 line 开头搜索（顺序无关�?
+    // "device_key":"  �?14个字�?
     p = strstr(line, "\"device_key\":\"");
     if (p == NULL) {
         DEBUG_4G_PRINTF(" DBG URC: device_key pattern not found\r\n");
         return;
     }
-    p += 14; // 跳过 "device_key":" (14个字符，使 p 指向值的第一个字符)
+    p += 14; // 跳过 "device_key":" (14个字符，�? p 指向值的第一个字�?)
     end = strchr(p, '"');
     if (end == NULL || end <= p) {
         DEBUG_4G_PRINTF(" DBG URC: device_key end quote not found\r\n");
@@ -1089,7 +1047,7 @@ static void https_urc_callback(const char *line)
     memcpy(s_reg_device_key, p, len);
     s_reg_device_key[len] = '\0';
 
-    // 保存�? device_register 模块
+    // 保存�?? device_register 模块
     device_register_set_credentials(s_reg_device_id, s_reg_device_key);
     device_register_save_to_flash();
 
@@ -1111,7 +1069,7 @@ static void send_cert_data(const char *cert_data)
         ;
 }
 
-// ==================== 错误码描述 ====================
+// ==================== 错误码描�? ====================
 
 // 返回 ML307R 模组错误码的人类可读描述
 static const char *ml307r_err_str(int code)
@@ -1171,7 +1129,7 @@ static const char *mqtt_conn_result_str(int code)
     }
 }
 
-// URC回调：捕获 +CEREG: <n>,<stat> 中的网络注册状态
+// URC回调：捕�? +CEREG: <n>,<stat> 中的网络注册状�?
 // stat: 1=home registered, 5=roaming registered, 0/2/3/4=not registered
 static void cereg_urc_callback(const char *line)
 {
@@ -1181,17 +1139,16 @@ static void cereg_urc_callback(const char *line)
     if (sscanf(line, "+CEREG: %d,%d", &n, &stat) == 2) {
         s_cereg_stat = stat;
     } else if (sscanf(line, "+CEREG: %d", &stat) == 1) {
-        // URC 格式（无n）: +CEREG: <stat>
+        // URC 格式（无n�?: +CEREG: <stat>
         s_cereg_stat = stat;
     }
 }
 
 /*---------------------------------------------------------------------------
- Name        : ml307r_task
+ Name        : void ml307r_task(void)
  Input       : 无
  Output      : 无
- Description :
- ML307R 4G模组主任务，在主循环中调用，实现状态机驱动
+ Description : ML307R模块任务，非阻塞状态机，主循环中周期执行。
 ---------------------------------------------------------------------------*/
 void ml307r_task(void)
 {
@@ -1204,12 +1161,12 @@ void ml307r_task(void)
         // 注册 URC 回调（仅注册一次）
         if (!s_urc_registered) {
             at_register_urc("+MHTTPURC", https_urc_callback);  // HTTPS 内容解析
-            at_register_urc("+CEREG:", cereg_urc_callback);     // 网络注册状态捕获
+            at_register_urc("+CEREG:", cereg_urc_callback);     // 网络注册状态捕�?
             at_mqtt_register_callback(on_mqtt_message);          // MQTT URC + 消息回调
             s_urc_registered = 1;
         }
 
-        // 初始化一�?? device_register 模块
+        // 初始化一�??? device_register 模块
         if (!s_dev_reg_init) {
             device_register_init();
             device_register_set_info(PRODUCT_ID, PRODUCT_SECRET, PRODUCT_MODEL, PRODUCT_SN);
@@ -1220,7 +1177,7 @@ void ml307r_task(void)
         switch (s_ml_sub_state)
         {
         case ML_SUB_AT:
-            DEBUG_4G_PRINTF(" >>> [1] AT test\r\n");
+            DEBUG_4G_PRINTF(" <<< [1] AT test\r\n");
             at_command_start("AT", 3000);
             s_ml_sub_state = ML_SUB_ATE0;
             break;
@@ -1229,7 +1186,7 @@ void ml307r_task(void)
             ret = at_command_check();
             if (ret == AT_NB_OK) {
                 DEBUG_4G_PRINTF(" OK - AT passed\r\n");
-                DEBUG_4G_PRINTF(" >>> [2] Disable echo\r\n");
+                DEBUG_4G_PRINTF(" <<< [2] Disable echo\r\n");
                 at_command_start("ATE0", 3000);
                 s_ml_sub_state = ML_SUB_CPIN;
             } else if (ret == AT_NB_ERR) {
@@ -1242,7 +1199,7 @@ void ml307r_task(void)
             ret = at_command_check();
             if (ret == AT_NB_OK) {
                 DEBUG_4G_PRINTF(" OK - Echo disabled\r\n");
-                DEBUG_4G_PRINTF(" >>> [3] Check SIM\r\n");
+                DEBUG_4G_PRINTF(" <<< [3] Check SIM\r\n");
                 at_command_start("AT+CPIN?", 3000);
                 s_ml_sub_state = ML_SUB_CSQ;
             } else if (ret == AT_NB_ERR) {
@@ -1255,7 +1212,7 @@ void ml307r_task(void)
             ret = at_command_check();
             if (ret == AT_NB_OK) {
                 DEBUG_4G_PRINTF(" OK - SIM ready\r\n");
-                DEBUG_4G_PRINTF(" >>> [4] Check signal\r\n");
+                DEBUG_4G_PRINTF(" <<< [4] Check signal\r\n");
                 at_command_start("AT+CSQ", 3000);
                 s_ml_sub_state = ML_SUB_CEREG;
             } else if (ret == AT_NB_ERR) {
@@ -1268,7 +1225,7 @@ void ml307r_task(void)
             ret = at_command_check();
             if (ret == AT_NB_OK) {
                 DEBUG_4G_PRINTF(" OK - Signal checked\r\n");
-                DEBUG_4G_PRINTF(" >>> [5] Wait network registration\r\n");
+                DEBUG_4G_PRINTF(" <<< [5] Wait network registration\r\n");
                 s_cereg_retry = 0;
                 at_command_start("AT+CEREG?", 5000);
                 s_ml_sub_state = ML_SUB_CEREG_WAIT;
@@ -1281,40 +1238,46 @@ void ml307r_task(void)
         case ML_SUB_CEREG_WAIT:
             ret = at_command_check();
             if (ret == AT_NB_OK) {
-                // s_cereg_stat 由 cereg_urc_callback 在收到 +CEREG: 行时更新
-                // stat=1 (home) 或 stat=5 (roaming) 代表已注册
+                // s_cereg_stat �? cereg_urc_callback 在收�? +CEREG: 行时更新
+                // stat=1 (home) �? stat=5 (roaming) 代表已注�?
                 if (s_cereg_stat == 1 || s_cereg_stat == 5) {
                     DEBUG_4G_PRINTF(" OK - Network registered (stat=%d)\r\n", s_cereg_stat);
-                    DEBUG_4G_PRINTF(" >>> [6] Activate PDP\r\n");
+                    DEBUG_4G_PRINTF(" <<< [6] Activate PDP\r\n");
                     at_command_start("AT+MIPCALL=1,1", 10000);
                     s_ml_sub_state = ML_SUB_MIPCALL;
                 } else {
-                    // 已注册命令OK但stat不合法，等待重试
                     s_cereg_retry++;
-                    DEBUG_4G_PRINTF(" >>> CEREG stat=%d not registered, retry %d/30\r\n",
+                    DEBUG_4G_PRINTF(" <<< CEREG stat=%d not registered, retry %d/30\r\n",
                                     s_cereg_stat, s_cereg_retry);
                     if (s_cereg_retry >= 30) {
                         DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                         s_ml_sub_state = ML_SUB_AT;
                     } else {
-                        s_wait_until = 0;
-                        if (ml_wait_ms(2000)) {
-                            s_ml_sub_state = ML_SUB_CEREG;
-                        }
+                        s_cereg_delay_start = SysTick_GetTick();
+                        s_ml_sub_state = ML_SUB_CEREG_DELAY;
                     }
                 }
             } else if (ret == AT_NB_ERR) {
                 s_cereg_retry++;
-                DEBUG_4G_PRINTF(" >>> CEREG retry %d/30\r\n", s_cereg_retry);
+                DEBUG_4G_PRINTF(" <<< CEREG retry %d/30\r\n", s_cereg_retry);
                 if (s_cereg_retry >= 30) {
                     DEBUG_4G_PRINTF(" !!! CEREG timeout, restart...\r\n");
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    s_wait_until = 0;
-                    if (ml_wait_ms(2000)) {
-                        s_ml_sub_state = ML_SUB_CEREG;
-                    }
+                    s_cereg_delay_start = SysTick_GetTick();
+                    s_ml_sub_state = ML_SUB_CEREG_DELAY;
                 }
+            }
+            break;
+
+        case ML_SUB_CEREG_DELAY:
+            // ??3????? AT+CEREG? ??
+            // ??at_command_check??RX??URC?????????????????
+            at_command_check();
+            if ((SysTick_GetTick() - s_cereg_delay_start) >= 3000) {
+                DEBUG_4G_PRINTF(" >>> Retrying CEREG query...\r\n");
+                at_command_start("AT+CEREG?", 5000);
+                s_ml_sub_state = ML_SUB_CEREG_WAIT;
             }
             break;
 
@@ -1329,12 +1292,12 @@ void ml307r_task(void)
                 DEBUG_4G_PRINTF(" !!! MIPCALL failed (err=%d)\r\n", err_code);
                 if (err_code == 50) {
                     // CME ERROR 50: PDP context already active, deactivate first
-                    DEBUG_4G_PRINTF(" >>> PDP already active, deactivating...\r\n");
+                    DEBUG_4G_PRINTF(" <<< PDP already active, deactivating...\r\n");
                     at_command_start("AT+MIPCALL=0,1", 5000);
                     s_ml_sub_state = ML_SUB_MIPCALL_DEACT;
                 } else {
                     // Other errors: retry from CEREG (not full restart)
-                    DEBUG_4G_PRINTF(" >>> Retry from network check\r\n");
+                    DEBUG_4G_PRINTF(" <<< Retry from network check\r\n");
                     s_cereg_retry = 0;
                     s_ml_sub_state = ML_SUB_CEREG;
                 }
@@ -1358,7 +1321,7 @@ void ml307r_task(void)
                 snprintf(cert_cmd, sizeof(cert_cmd),
                          "AT+MSSLCERTWR=\"ca.cer\",0,%d\r\n",
                          (int)(sizeof(ca_cert_data) - 1));
-                DEBUG_4G_PRINTF(" >>> [7] Write CA cert step1: %s", cert_cmd);
+                DEBUG_4G_PRINTF(" <<< [7] Write CA cert step1: %s", cert_cmd);
                 at_flush_rx();
                 at_send_raw((const uint8_t *)cert_cmd, (uint16_t)strlen(cert_cmd));
                 s_cert_wait_start = SysTick_GetTick();
@@ -1414,7 +1377,7 @@ void ml307r_task(void)
                 snprintf(key_cmd, sizeof(key_cmd),
                          "AT+MSSLKEYWR=\"client.key\",0,%d\r\n",
                          (int)(sizeof(client_key_data) - 1));
-                DEBUG_4G_PRINTF(" >>> [8] Write client key step1: %s", key_cmd);
+                DEBUG_4G_PRINTF(" <<< [8] Write client key step1: %s", key_cmd);
                 at_flush_rx();
                 at_send_raw((const uint8_t *)key_cmd, (uint16_t)strlen(key_cmd));
                 s_cert_wait_start = SysTick_GetTick();
@@ -1465,7 +1428,7 @@ void ml307r_task(void)
                 snprintf(dev_cmd, sizeof(dev_cmd),
                          "AT+MSSLCERTWR=\"client.cer\",0,%d\r\n",
                          (int)(sizeof(client_cert_data) - 1));
-                DEBUG_4G_PRINTF(" >>> [9] Write client cert step1: %s", dev_cmd);
+                DEBUG_4G_PRINTF(" <<< [9] Write client cert step1: %s", dev_cmd);
                 at_flush_rx();
                 at_send_raw((const uint8_t *)dev_cmd, (uint16_t)strlen(dev_cmd));
                 s_cert_wait_start = SysTick_GetTick();
@@ -1493,7 +1456,7 @@ void ml307r_task(void)
                 {
                     DEBUG_4G_PRINTF(" OK - Client cert written!\r\n");
                     s_cert_step = CERT_STEP_CMD;
-                    // 进入 HTTPS 凭证检�?
+                    // 进入 HTTPS 凭证检�??
                     s_ml_sub_state = ML_SUB_HTTPS_CHECK;
                 }
                 else if (r == -1)
@@ -1509,18 +1472,18 @@ void ml307r_task(void)
             }
             break;
 
-        // ==================== 阶段4: HTTPS预配置（获取 device_id / device_key�?? ====================
+        // ==================== 阶段4: HTTPS预配置（获取 device_id / device_key�??? ====================
 
         case ML_SUB_HTTPS_CHECK:
         {
-            // 检�?? EEPROM 中是否已有有效凭证（已在启动时加载）
+            // 检�??? EEPROM 中是否已有有效凭证（已在启动时加载）
             if (device_register_get_state() == DEVICE_REG_SUCCESS) {
                 const device_credentials_t *cred = device_register_get_credentials();
                 DEBUG_4G_PRINTF(" OK - Already registered, skip HTTPS\r\n");
                 DEBUG_4G_PRINTF("     device_id=%s\r\n", cred->device_id);
                 s_ml_sub_state = ML_SUB_SSL_AUTH;
             } else {
-                DEBUG_4G_PRINTF(" >>> [10] Need registration, start HTTPS...\r\n");
+                DEBUG_4G_PRINTF(" <<< [10] Need registration, start HTTPS...\r\n");
                 s_https_reg_done = 0;
                 s_cert_step = CERT_STEP_CMD;
                 s_ml_sub_state = ML_SUB_HTTPS_SSL_CFG;
@@ -1529,13 +1492,13 @@ void ml307r_task(void)
         }
 
         case ML_SUB_HTTPS_SSL_CFG:
-            // AT+MSSLCFG="cert",0,"ca.cer" - 绑定CA证书（单向认证用于HTTPS注册�?
+            // AT+MSSLCFG="cert",0,"ca.cer" - 绑定CA证书（单向认证用于HTTPS注册�??
             ret = at_command_check();
             if (ret == AT_NB_IDLE)
                 break; // 还在等待，不做任何事
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
-            DEBUG_4G_PRINTF(" >>> SSL cert config\r\n");
+            DEBUG_4G_PRINTF(" <<< SSL cert config\r\n");
             at_command_start("AT+MSSLCFG=\"cert\",0,\"ca.cer\"", 3000);
             s_ml_sub_state = ML_SUB_HTTPS_CREATE;
             break;
@@ -1547,7 +1510,7 @@ void ml307r_task(void)
             if (ret != AT_NB_OK)
                 break;
             DEBUG_4G_PRINTF(" OK - SSL cert OK\r\n");
-            DEBUG_4G_PRINTF(" >>> Create HTTP instance\r\n");
+            DEBUG_4G_PRINTF(" <<< Create HTTP instance\r\n");
             at_command_start("AT+MHTTPCREATE=\"https://api.cn.dream-maker.com:8443\"", 5000);
             s_ml_sub_state = ML_SUB_HTTPS_HEADER;
             break;
@@ -1559,7 +1522,7 @@ void ml307r_task(void)
             if (ret != AT_NB_OK)
                 break;
             DEBUG_4G_PRINTF(" OK - HTTP instance created\r\n");
-            DEBUG_4G_PRINTF(" >>> Config SSL and header\r\n");
+            DEBUG_4G_PRINTF(" <<< Config SSL and header\r\n");
             // 绑定SSL到HTTP实例
             at_command_start("AT+MHTTPCFG=\"ssl\",0,1,0", 3000);
             s_ml_sub_state = ML_SUB_HTTPS_CONTENT;
@@ -1571,9 +1534,9 @@ void ml307r_task(void)
                 break;
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
-            // 设置请求�?
+            // 设置请求�??
             DEBUG_4G_PRINTF(" OK - SSL bound\r\n");
-            DEBUG_4G_PRINTF(" >>> Set header\r\n");
+            DEBUG_4G_PRINTF(" <<< Set header\r\n");
             at_command_start("AT+MHTTPCFG=\"header\",0,\"Content-Type: application/json\"", 3000);
             s_ml_sub_state = ML_SUB_HTTPS_CONTENT2;
             break;
@@ -1584,7 +1547,7 @@ void ml307r_task(void)
                 break;
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
-            // 构�? JSON body 并发�?
+            // 构�? JSON body 并发�??
             DEBUG_4G_PRINTF(" OK - Header set\r\n");
             char prov_code[17];
             md5_encrypt_code(PRODUCT_SECRET, PRODUCT_SN, prov_code);
@@ -1592,7 +1555,7 @@ void ml307r_task(void)
                      "{\"product_id\":\"%s\",\"sn\":\"%s\",\"prov_code\":\"%s\",\"mark\":\"++++++\"}",
                      PRODUCT_ID, PRODUCT_SN, prov_code);
             s_https_body_len = strlen(s_json_body);
-            DEBUG_4G_PRINTF(" >>> Send JSON body (%u bytes)\r\n", (unsigned int)s_https_body_len);
+            DEBUG_4G_PRINTF(" <<< Send JSON body (%u bytes)\r\n", (unsigned int)s_https_body_len);
             // 先发命令头，等待 >
             char cmd[32];
             snprintf(cmd, sizeof(cmd), "AT+MHTTPCONTENT=0,0,%u", (unsigned int)s_https_body_len);
@@ -1605,10 +1568,10 @@ void ml307r_task(void)
 
         case ML_SUB_HTTPS_CONTENT3:
             // 等待 > 提示符，同时处理 RX 数据
-            at_command_check(); // 处理 RX 以触�? URC 回调
+            at_command_check(); // 处理 RX 以触�?? URC 回调
             if (at_got_prompt()) {
                 DEBUG_4G_PRINTF(" OK - Got >, sending JSON...\r\n");
-                // 直接发�? JSON body（不�? \r\n�?
+                // 直接发�? JSON body（不�?? \r\n�??
                 at_send_raw((const uint8_t *)s_json_body, (uint16_t)s_https_body_len);
                 s_ml_sub_state = ML_SUB_HTTPS_REQUEST;
             } else if ((SysTick_GetTick() - s_cert_wait_start) > 5000) {
@@ -1633,10 +1596,10 @@ void ml307r_task(void)
 
         case ML_SUB_HTTPS_WAIT_URC:
         {
-            // 持续处理 RX 数据以触�? URC 回调
+            // 持续处理 RX 数据以触�?? URC 回调
             at_command_check();
             if (s_https_reg_done) {
-                // URC 回调已解析成�?
+                // URC 回调已解析成�??
                 DEBUG_4G_PRINTF(" OK - Device registered via HTTPS!\r\n");
                 at_command_start("AT+MHTTPDEL=0", 3000);
                 s_ml_sub_state = ML_SUB_HTTPS_CLEANUP;
@@ -1656,8 +1619,8 @@ void ml307r_task(void)
                 break;
             DEBUG_4G_PRINTF(" OK - HTTP instance deleted\r\n");
             if (!s_https_reg_done) {
-                // 注册尚未完成，重试 HTTPS 注册流程
-                DEBUG_4G_PRINTF(" >>> HTTPS reg not done, retrying...\r\n");
+                // 注册尚未完成，重�? HTTPS 注册流程
+                DEBUG_4G_PRINTF(" <<< HTTPS reg not done, retrying...\r\n");
                 s_ml_sub_state = ML_SUB_HTTPS_SSL_CFG;
             } else {
                 // 注册已完成，继续 SSL 双向认证
@@ -1669,16 +1632,16 @@ void ml307r_task(void)
 
         case ML_SUB_SSL_AUTH:
         {
-            // 等待上一条命令完成（可能�? HTTPS_CLEANUP �? MHTTPDEL�?
+            // 等待上一条命令完成（可能�?? HTTPS_CLEANUP �?? MHTTPDEL�??
             ret = at_command_check();
             if (ret == AT_NB_IDLE)
                 break; // 还在等待，不做任何事
             if (ret != AT_NB_OK && ret != AT_NB_ERR) {
-                // AT_NB_WAITING 或其他，不做任何�?
+                // AT_NB_WAITING 或其他，不做任何�??
                 break;
             }
             // AT命令完成了，发�? SSL 双向认证命令
-            DEBUG_4G_PRINTF(" >>> [11] SSL auth (MSSLCFG)\r\n");
+            DEBUG_4G_PRINTF(" <<< [11] SSL auth (MSSLCFG)\r\n");
             at_command_start("AT+MSSLCFG=\"cert\",0,\"ca.cer\",\"client.cer\",\"client.key\"", 3000);
             s_ml_sub_state = ML_SUB_SSL_AUTH_WAIT;
             break;
@@ -1704,7 +1667,7 @@ void ml307r_task(void)
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
             DEBUG_4G_PRINTF(" OK - Auth mode set\r\n");
-            DEBUG_4G_PRINTF(" >>> MQTT SSL enable\r\n");
+            DEBUG_4G_PRINTF(" <<< MQTT SSL enable\r\n");
             at_command_start("AT+MQTTCFG=\"ssl\",0,1,0", 3000);
             s_ml_sub_state = ML_SUB_MQTT_CONN;
             break;
@@ -1721,7 +1684,7 @@ void ml307r_task(void)
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
             DEBUG_4G_PRINTF(" OK - MQTT SSL enabled\r\n");
-            DEBUG_4G_PRINTF(" >>> MQTT keepalive=120\r\n");
+            DEBUG_4G_PRINTF(" <<< MQTT keepalive=120\r\n");
             at_command_start("AT+MQTTCFG=\"keepalive\",0,120", 3000);
             s_ml_sub_state = ML_SUB_MQTT_CONN_WAIT1;
             break;
@@ -1734,7 +1697,7 @@ void ml307r_task(void)
             if (ret != AT_NB_OK && ret != AT_NB_ERR)
                 break;
             DEBUG_4G_PRINTF(" OK - Keepalive set\r\n");
-            DEBUG_4G_PRINTF(" >>> MQTT clean=1\r\n");
+            DEBUG_4G_PRINTF(" <<< MQTT clean=1\r\n");
             at_command_start("AT+MQTTCFG=\"clean\",0,1", 3000);
             s_ml_sub_state = ML_SUB_MQTT_CONN_WAIT2;
             break;
@@ -1752,14 +1715,14 @@ void ml307r_task(void)
             snprintf(mqtt_cmd, sizeof(mqtt_cmd),
                 "AT+MQTTCONN=0,\"mqtt.cn.dream-maker.com\",8883,\"%s\",\"%s\",\"%s\"",
                 PRODUCT_SN, cred->device_id, cred->device_key);
-            DEBUG_4G_PRINTF(" >>> [12] MQTT connect\r\n");
+            DEBUG_4G_PRINTF(" <<< [12] MQTT connect\r\n");
             g_mqtt_conn_result = -1;  // 重置，等待新的连接URC
             at_command_start(mqtt_cmd, 10000);
             s_ml_sub_state = ML_SUB_MQTT_SUB;
             break;
         }
 
-        // ==================== 阶段6b: 等待AT+MQTTCONN命令被模组接受 ====================
+        // ==================== 阶段6b: 等待AT+MQTTCONN命令被模组接�? ====================
 
         case ML_SUB_MQTT_SUB:
             // 等待模组接受 AT+MQTTCONN 命令（返回OK，不代表TCP连接已建立）
@@ -1778,7 +1741,7 @@ void ml307r_task(void)
                     s_mqtt_retry = 0;
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    DEBUG_4G_PRINTF(" >>> MQTT retry %d/3\r\n", s_mqtt_retry);
+                    DEBUG_4G_PRINTF(" <<< MQTT retry %d/3\r\n", s_mqtt_retry);
                     s_ml_sub_state = ML_SUB_MQTT_CONN;
                 }
             }
@@ -1792,18 +1755,18 @@ void ml307r_task(void)
             at_command_check();
 
             if (g_mqtt_conn_result == 0) {
-                // 连接成功，发起订阅
+                // 连接成功，发起订�?
                 const device_credentials_t *cred = device_register_get_credentials();
                 char sub_cmd[128];
                 snprintf(sub_cmd, sizeof(sub_cmd),
                     "AT+MQTTSUB=0,\"down/%s/%s\",0",
                     PRODUCT_ID, cred->device_id);
-                DEBUG_4G_PRINTF(" >>> [13] MQTT connected, subscribe: %s\r\n", sub_cmd);
-                s_mqtt_retry = 0;  // 连接成功，重置重试计数
+                DEBUG_4G_PRINTF(" <<< [13] MQTT connected, subscribe: %s\r\n", sub_cmd);
+                s_mqtt_retry = 0;  // 连接成功，重置重试计�?
                 at_command_start(sub_cmd, 5000);
                 s_ml_sub_state = ML_SUB_MQTT_SUB_WAIT;
             } else if (g_mqtt_conn_result > 0) {
-                // 连接失败（服务器拒绝、网络错误等）
+                // 连接失败（服务器拒绝、网络错误等�?
                 DEBUG_4G_PRINTF(" !!! MQTT conn URC: result=%d (%s)\r\n",
                     g_mqtt_conn_result, mqtt_conn_result_str(g_mqtt_conn_result));
                 s_mqtt_retry++;
@@ -1812,7 +1775,7 @@ void ml307r_task(void)
                     s_mqtt_retry = 0;
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    DEBUG_4G_PRINTF(" >>> MQTT retry %d/3\r\n", s_mqtt_retry);
+                    DEBUG_4G_PRINTF(" <<< MQTT retry %d/3\r\n", s_mqtt_retry);
                     s_ml_sub_state = ML_SUB_MQTT_CONN;
                 }
             } else if ((SysTick_GetTick() - s_mqtt_urc_wait_start) > 15000) {
@@ -1824,7 +1787,7 @@ void ml307r_task(void)
                     s_mqtt_retry = 0;
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    DEBUG_4G_PRINTF(" >>> MQTT retry %d/3\r\n", s_mqtt_retry);
+                    DEBUG_4G_PRINTF(" <<< MQTT retry %d/3\r\n", s_mqtt_retry);
                     s_ml_sub_state = ML_SUB_MQTT_CONN;
                 }
             }
@@ -1837,6 +1800,8 @@ void ml307r_task(void)
             ret = at_command_check();
             if (ret == AT_NB_OK) {
                 DEBUG_4G_PRINTF(" OK - MQTT subscribed\r\n");
+                // 设置iot下行回调
+                ml307r_mqtt_set_downlink_callback(iot_mqtt_downlink_handler);
                 s_ml_sub_state = ML_SUB_DONE;
             } else if (ret == AT_NB_ERR) {
                 int err_code = at_get_last_error_code();
@@ -1848,14 +1813,14 @@ void ml307r_task(void)
                     s_mqtt_retry = 0;
                     s_ml_sub_state = ML_SUB_AT;
                 } else {
-                    DEBUG_4G_PRINTF(" >>> MQTT retry %d/3, reconnecting\r\n", s_mqtt_retry);
+                    DEBUG_4G_PRINTF(" <<< MQTT retry %d/3, reconnecting\r\n", s_mqtt_retry);
                     s_ml_sub_state = ML_SUB_MQTT_CONN;
                 }
             }
             break;
 
         case ML_SUB_DONE:
-            DEBUG_4G_PRINTF(" >>> ML307R ALL INIT COMPLETE!\r\n");
+            DEBUG_4G_PRINTF(" <<< ML307R ALL INIT COMPLETE!\r\n");
             s_init_done = 1;
             break;
 
@@ -1866,6 +1831,91 @@ void ml307r_task(void)
         return;
     }
 
-    // ========== �������У����ڷ������� ==========
-    // TODO: ���ڷ��� MQTT publish
+    // ========== 主循环 ==========
+    // IoT任务处理
+    if (ml307r_mqtt_is_connected()) {
+        iot_task();
+    }
+
+    // ========== 保持连接 + 发布数据 ==========
+
+    // ?? MQTT ?? URC (+MQTTURC: "disc")
+    if (g_mqtt_disc_code >= 0) {
+        DEBUG_4G_PRINTF(" >>> MQTT disconnected (code=%d), reconnecting...\r\n", g_mqtt_disc_code);
+        g_mqtt_disc_code = -1;
+        s_run_pub_state = RUN_IDLE;
+        s_run_last_info_pub = 0;
+        s_run_last_power_pub = 0;
+        s_init_done = 0;
+        at_command_start("AT+MQTTCFG=\"ssl\",0,1,0", 3000);
+        s_ml_sub_state = ML_SUB_MQTT_CONN;
+        return;
+    }
+
+    // ?????
+    if (s_run_pub_state == RUN_IDLE) {
+        const device_credentials_t *cred = device_register_get_credentials();
+        uint32_t now = SysTick_GetTick();
+        char pub_cmd[128];
+
+        // ????????????????60????
+        if (s_run_last_info_pub == 0 || (now - s_run_last_info_pub) >= 60000UL) {
+            s_run_payload_len = snprintf(s_run_payload, sizeof(s_run_payload),
+                "{\"id\":%d,\"method\":\"information\",\"params\":{"
+                "\"sn\":\"%s\",\"product_model\":\"%s\","
+                "\"mcu_version\":\"%s\",\"rssi\":-63}}",
+                s_mqtt_msg_id++, cred->device_sn, cred->product_model, SW_VERSION);
+            snprintf(pub_cmd, sizeof(pub_cmd),
+                "AT+MQTTPUB=0,\"up/%s/%s\",0,0,1,%d\r\n",
+                cred->product_id, cred->device_id, s_run_payload_len);
+            DEBUG_4G_PRINTF(" >>> [PUB] device_info: %s\r\n", s_run_payload);
+            at_flush_rx();
+            at_send_raw((const uint8_t *)pub_cmd, (uint16_t)strlen(pub_cmd));
+            s_run_pub_start = SysTick_GetTick();
+            s_run_pub_state = RUN_PUB_WAIT_PROMPT;
+            s_run_last_info_pub = now;
+
+        // CT??????5????
+        } else if (s_run_last_power_pub == 0 || (now - s_run_last_power_pub) >= 5000UL) {
+            s_run_payload_len = snprintf(s_run_payload, sizeof(s_run_payload),
+                "{\"id\":%d,\"method\":\"properties_changed\",\"params\":["
+                "{\"siid\":4,\"piid\":7,\"value\":%.1f},"
+                "{\"siid\":4,\"piid\":8,\"value\":%.1f}]}",
+                s_mqtt_msg_id++,
+                sys_param.ct1.power.avg_power,
+                sys_param.ct_today_energy);
+            snprintf(pub_cmd, sizeof(pub_cmd),
+                "AT+MQTTPUB=0,\"up/%s/%s\",0,0,1,%d\r\n",
+                cred->product_id, cred->device_id, s_run_payload_len);
+            DEBUG_4G_PRINTF(" >>> [PUB] ct_power: %s\r\n", s_run_payload);
+            at_flush_rx();
+            at_send_raw((const uint8_t *)pub_cmd, (uint16_t)strlen(pub_cmd));
+            s_run_pub_start = SysTick_GetTick();
+            s_run_pub_state = RUN_PUB_WAIT_PROMPT;
+            s_run_last_power_pub = now;
+        }
+
+    } else if (s_run_pub_state == RUN_PUB_WAIT_PROMPT) {
+        if (at_got_prompt()) {
+            at_send_raw((const uint8_t *)s_run_payload, (uint16_t)s_run_payload_len);
+            s_run_pub_start = SysTick_GetTick();
+            s_run_pub_state = RUN_PUB_WAIT_OK;
+        } else if ((SysTick_GetTick() - s_run_pub_start) >= 5000UL) {
+            DEBUG_4G_PRINTF(" !!! MQTT publish: no > in 5s\r\n");
+            s_run_pub_state = RUN_IDLE;
+        }
+
+    } else if (s_run_pub_state == RUN_PUB_WAIT_OK) {
+        int r = at_check_last_result();
+        if (r == 1) {
+            DEBUG_4G_PRINTF(" OK - MQTT publish done\r\n");
+            s_run_pub_state = RUN_IDLE;
+        } else if (r == -1) {
+            DEBUG_4G_PRINTF(" !!! MQTT publish ERROR\r\n");
+            s_run_pub_state = RUN_IDLE;
+        } else if ((SysTick_GetTick() - s_run_pub_start) >= 5000UL) {
+            DEBUG_4G_PRINTF(" !!! MQTT publish: no OK in 5s\r\n");
+            s_run_pub_state = RUN_IDLE;
+        }
+    }
 }

@@ -587,6 +587,11 @@
               <FileType>1</FileType>
               <FilePath>..\app\src\uart_at.c</FilePath>
             </File>
+            <File>
+              <FileName>iot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\app\src\iot.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1174,6 +1179,11 @@
               <FileName>uart_at.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\app\src\uart_at.c</FilePath>
+            </File>
+            <File>
+              <FileName>iot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\app\src\iot.c</FilePath>
             </File>
           </Files>
         </Group>

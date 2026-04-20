@@ -5,8 +5,8 @@
 #include <stdbool.h>
 
 // FFT 参数配置
-#define N_FFT 1024            // FFT点数
-#define LOG2_N 10             // log2(1024) = 10
+#define N_FFT 512            // FFT点数
+#define LOG2_N 9             // log2(512) = 9
 #define FFT_SAMPLE_RATE 50.0f // 采样频率: 50Hz (20ms采样)
 #define FFT_BIN_COUNT 206     // 4~14Hz bin数量
 #define FFT_FREQ_MIN 4.0f     // FFT分析最低频率 (Hz)

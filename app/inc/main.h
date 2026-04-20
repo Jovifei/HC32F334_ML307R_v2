@@ -26,7 +26,7 @@
 #define DEBUG_4G_ENABLE
 
 #ifdef DEBUG_4G_ENABLE
-#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R] " fmt, ##__VA_ARGS__)
+#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R]" fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_4G_PRINTF(fmt, ...) ((void)0)
 #endif
@@ -110,7 +110,7 @@
 #define INV_REPORT_51_SIZE 20  // 51数据上报最大长度
 
 // ================= 连接多sub1g设备 =================
-#define INV_DEVICE_MAX_NUM 8                      // 最大设备数量
+#define INV_DEVICE_MAX_NUM 2                      // 最大设备数量
 #define USER_PAIR_LIST_MAX_NUM INV_DEVICE_MAX_NUM // 用户配对列表最大数量
 #define PRODUCT_MODEL_MAX_LEN 10                  // 产品型号最大长度
 
@@ -130,7 +130,7 @@
 #define SWITCH_INV_BOARCAST 1                      // 同一个微逆广播几次，切换到下一个微逆
 
 // ================= 避免UART1串口的冲突定义环形缓存区 =================
-#define UART1_TX_QUEUE_SIZE 6
+#define UART1_TX_QUEUE_SIZE 2
 #define UART1_TX_MSG_MAX_LEN 100
 
 // 微逆设备属性PIID定义

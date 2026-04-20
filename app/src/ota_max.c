@@ -20,9 +20,9 @@ static void ota_retry_failed_devices(void);
 
 /*---------------------------------------------------------------------------
  Name        : void ota_manager_init(void)
- Input       : ��
- Output      : ��
- Description : ��ʼ��OTA������
+ Input       : 无
+ Output      : 无
+ Description : OTA管理器初始化。
 ---------------------------------------------------------------------------*/
 void ota_manager_init(void)
 {
@@ -35,9 +35,9 @@ void ota_manager_init(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_manager_task(void)
- Input       : ��
- Output      : ��
- Description : OTA����������������ѭ���е��ã�1ms���ڣ�
+ Input       : 无
+ Output      : 无
+ Description : OTA管理器任务，非阻塞状态机。
 ---------------------------------------------------------------------------*/
 void ota_manager_task(void)
 {
@@ -63,11 +63,9 @@ void ota_manager_task(void)
 
 /*---------------------------------------------------------------------------
  Name        : ota_start_result_t ota_check_start_status(void)
- Input       : ��
- Output      : OTA_START_READY(0)-�ɹ�׼������
-               OTA_START_BUSY(1)-��æ
-               OTA_START_ERROR(2)-����
- Description : ���OTA����״̬����ʼ���������̣���parse_ota_start_data������ɺ����
+ Input       : 无
+ Output      : OTA启动结果
+ Description : 检查OTA启动状态。
 ---------------------------------------------------------------------------*/
 ota_start_result_t ota_check_start_status(void)
 {
@@ -147,11 +145,9 @@ ota_start_result_t ota_check_start_status(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_device_list_init(void)
- Input       : ��
- Output      : ��
- Description : ��ʼ���������豸�б�
-               �̼�����3: device_count=1 (CT Sub1G)
-               �̼�����4/5/6: device_count=�Ѱ�΢�����
+ Input       : 无
+ Output      : 无
+ Description : OTA设备列表初始化。
 ---------------------------------------------------------------------------*/
 static void ota_device_list_init(void)
 {
@@ -255,9 +251,9 @@ static void ota_device_list_init(void)
 
 /*---------------------------------------------------------------------------
  Name        : static bool ota_start_next_device(void)
- Input       : ��
- Output      : true-�ɹ�����, false-���豸������
- Description : ִ�д�һ���豸����һ���豸�������л��ͳ�ʼ������
+ Input       : 无
+ Output      : 启动状态
+ Description : 开始下一个设备的OTA升级。
 ---------------------------------------------------------------------------*/
 static bool ota_start_next_device(void)
 {
@@ -295,9 +291,9 @@ static bool ota_start_next_device(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_retry_failed_devices(void)
- Input       : ��
- Output      : ��
- Description : ���ĳ���豸��ͨ���з������ʱ���ʼ��Ӧ��ʧ�ܣ����豸�ᱻ���Ϊʧ�ܣ�������¼��ʧ���豸�б��С��������豸�ĵ�һ�ֳ��Խ����󣬴˺���������Ԥ����豸���������ƣ������Ƿ����Щʧ�ܵ��豸������һ�ֵĳ��ԡ�
+ Input       : 无
+ Output      : 无
+ Description : 重试失败的设备OTA升级。
 ---------------------------------------------------------------------------*/
 static void ota_retry_failed_devices(void)
 {
@@ -361,9 +357,9 @@ static void ota_retry_failed_devices(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_process_current_device(void)
- Input       : ��
- Output      : ��
- Description : ������ݵ�ǰ�豸�� OTA ״̬���ƽ��������̼��������̡�
+ Input       : 无
+ Output      : 无
+ Description : 处理当前设备的OTA升级。
 ---------------------------------------------------------------------------*/
 static void ota_process_current_device(void)
 {
@@ -609,9 +605,9 @@ static void ota_process_current_device(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_handle_timeout(void)
- Input       : ��
- Output      : ��
- Description : �� CT �豸�� Sub1G �豸����������ʼ�������ݰ����󣬴�����Ŀ���豸��Ӧ������µĳ�ʱ�������߼�
+ Input       : 无
+ Output      : 无
+ Description : 处理OTA超时。
 ---------------------------------------------------------------------------*/
 static void ota_handle_timeout(void)
 {
@@ -709,10 +705,10 @@ static void ota_handle_timeout(void)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_complete_device(uint8_t device_idx, bool success)
- Input       : device_idx - �豸����
-               success - �Ƿ�ɹ�
- Output      : ��
- Description : ����豸��������¼�ɹ�/ʧ�ܣ�ʧ���豸���������б�
+ Input       : device_idx - 设备索引
+               success - 是否成功
+ Output      : 无
+ Description : 完成设备OTA升级。
 ---------------------------------------------------------------------------*/
 static void ota_complete_device(uint8_t device_idx, bool success)
 {
@@ -743,10 +739,10 @@ static void ota_complete_device(uint8_t device_idx, bool success)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_request_firmware_from_wifi(uint32_t address, uint16_t length)
- Input       : address - �̼���ַ
-                length - ���󳤶�(ʵ����Ҫ�ĳ���,��ǿ��128�ֽ�)
- Output      : ��
- Description : ��WiFi����̼�����
+ Input       : address - 固件地址
+               length - 固件长度
+ Output      : 无
+ Description : 从WiFi请求固件数据。
 ---------------------------------------------------------------------------*/
 static void ota_request_firmware_from_wifi(uint32_t address, uint16_t length)
 {
@@ -771,12 +767,9 @@ static void ota_request_firmware_from_wifi(uint32_t address, uint16_t length)
 
 /*---------------------------------------------------------------------------
  Name        : static void ota_send_finish_result_to_wifi(uint8_t result)
- Input       : result - OTA��ɽ��
-                        OTA_RESULT_SUCCESS_ALL - ȫ���ɹ�
-                        OTA_RESULT_PARTIAL_SUCCESS - ���ֳɹ�
-                        OTA_RESULT_FAILED - ȫ��ʧ��
- Output      : ��
- Description : ��WiFi����OTA��ɽ��������CMD=1002����ʽ{1�ֽ�result}
+ Input       : result - 完成结果
+ Output      : 无
+ Description : 发送完成结果到WiFi。
 ---------------------------------------------------------------------------*/
 static void ota_send_finish_result_to_wifi(ota_result_t result)
 {
@@ -795,12 +788,9 @@ static void ota_send_finish_result_to_wifi(ota_result_t result)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_copy_wifi_fw_data(...)
- Input       : data - �̼�����
-               length - ���ݳ���
- Output      : ��
- Description : ����WiFi�����Ĺ̼�����(CMD=1001Ӧ��)
-               ��mmi.c��serial_msg_parse������ɺ�,�յ�CMD=1001,TYPE=1ʱ����
-               WiFi���ݸ�ʽ: {DATA:N*BYTE} - ������������
+ Input       : 固件数据参数
+ Output      : 无
+ Description : 拷贝WiFi固件数据。
 ---------------------------------------------------------------------------*/
 void ota_copy_wifi_fw_data(const uint8_t *data, uint16_t length)
 {
@@ -833,9 +823,9 @@ void ota_copy_wifi_fw_data(const uint8_t *data, uint16_t length)
 
 /*---------------------------------------------------------------------------
  Name        : sub1g_ota_type_t ota_fw_type_to_sub1g_type(ota_fw_type_t fw_type)
- Input       : fw_type - �̼�����
- Output      : Sub1G OTA����
- Description : ���̼�����ת��ΪSub1G OTA����
+ Input       : fw_type - 固件类型
+ Output      : Sub1G OTA类型
+ Description : 固件类型转换为Sub1G类型。
 ---------------------------------------------------------------------------*/
 sub1g_ota_type_t ota_fw_type_to_sub1g_type(ota_fw_type_t fw_type)
 {
@@ -856,20 +846,20 @@ sub1g_ota_type_t ota_fw_type_to_sub1g_type(ota_fw_type_t fw_type)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_send_init_request(void)
- Input       : ��
- Output      : ��
- Description : ��ȡOTA���״̬
+ Input       : 无
+ Output      : 无
+ Description : 发送初始化请求。
 ---------------------------------------------------------------------------*/
 /*---------------------------------------------------------------------------
  Name        : ota_result_t ota_get_finish_status(void)
- Input       : ��
- Output      : OTA���״̬
- Description : ��ȡOTA���״̬
-               - ȫ���ɹ� (result=0)������ԭʼ��Ҫ�������豸���ɹ�
-               - ���ֳɹ� (result=1)���в����豸�ɹ���������ȫ��
-               - ȫ��ʧ�� (result=2)�������豸��ʧ��
-               ע�⣺ʹ��original_device_count����need_ota_device_count��
-                     ��Ϊ����������ʱ�ᱻ����
+ Input       : 无
+ Output      : OTA完成状态
+ Description : 获取OTA完成状态。
+               - 全部成功 (result=0)：包括原始所有设备和新发现的设备都成功
+               - 部分成功 (result=1)：包含部分设备成功，但不是全部
+               - 全部失败 (result=2)：所有设备都失败
+               注意：使用 original_device_count 和 need_ota_device_count
+                     来判断在操作期间是否被更新
 ---------------------------------------------------------------------------*/
 ota_result_t ota_get_finish_status(void)
 {
@@ -895,10 +885,10 @@ ota_result_t ota_get_finish_status(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_handle_sub1g_init_ack(uint32_t sub1g_addr, uint8_t status)
- Input       : sub1g_addr - Sub1G�豸��ַ
-               status - ��ʼ��״̬ (0-�ɹ�, ����-ʧ��)
- Output      : ��
- Description : ����Sub1G��ʼ��Ӧ�� (0x71)
+ Input       : sub1g_addr - Sub1G地址
+               status - 初始化状态
+ Output      : 无
+ Description : 处理Sub1G初始化应答。
 ---------------------------------------------------------------------------*/
 void ota_handle_sub1g_init_ack(uint32_t sub1g_addr, uint8_t status)
 {
@@ -932,11 +922,11 @@ void ota_handle_sub1g_init_ack(uint32_t sub1g_addr, uint8_t status)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_handle_sub1g_data_ack(uint32_t sub1g_addr, uint16_t packet_num, uint8_t status)
- Input       : sub1g_addr - Sub1G�豸��ַ
-               packet_num - ���ݰ���ţ���1��ʼ��
-               status - ���ݰ�״̬ (0-�ɹ�, ����-ʧ��)
- Output      : ��
- Description : ����Sub1G����Ӧ�� (0x73)
+ Input       : sub1g_addr - Sub1G地址
+               packet_num - 数据包编号
+               status - 数据状态
+ Output      : 无
+ Description : 处理Sub1G数据应答。
 ---------------------------------------------------------------------------*/
 void ota_handle_sub1g_data_ack(uint32_t sub1g_addr, uint16_t packet_num, uint8_t status)
 {
@@ -993,9 +983,9 @@ void ota_handle_sub1g_data_ack(uint32_t sub1g_addr, uint16_t packet_num, uint8_t
 
 /*---------------------------------------------------------------------------
  Name        : void ota_handle_sub1g_cancel(uint32_t sub1g_addr)
- Input       : sub1g_addr - Sub1G�豸��ַ
- Output      : ��
- Description : ȡ��Sub1G�豸������ (0x75)
+ Input       : sub1g_addr - Sub1G地址
+ Output      : 无
+ Description : 处理Sub1G取消请求。
 ---------------------------------------------------------------------------*/
 void ota_handle_sub1g_cancel(uint32_t sub1g_addr)
 {
@@ -1016,13 +1006,11 @@ void ota_handle_sub1g_cancel(uint32_t sub1g_addr)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_handle_sub1g_version_report(uint32_t sub1g_addr, const char *sub1g_version, const char *mcu_version)
- Input       : sub1g_addr - Sub1G�豸��ַ
-               sub1g_version - Sub1G�汾��
-               mcu_version - MCU�汾��
- Output      : ��
- Description : ����΢���豸�ϱ��汾�� (0x77)������OTA������ɺ�ȷ���豸�汾
-               �жϰ汾���Ƿ���Ŀ��汾һ�£�һ���������ɹ������°汾��Ϣ����һ����ʧ��
-               ע�⣺�˺���ֻ����΢���豸��������CT Sub1G
+ Input       : sub1g_addr - Sub1G地址
+               sub1g_version - Sub1G版本号
+               mcu_version - MCU版本号
+ Output      : 无
+ Description : 处理Sub1G版本报告。
 ---------------------------------------------------------------------------*/
 void ota_handle_sub1g_version_report(uint32_t sub1g_addr, const char *sub1g_version, const char *mcu_version)
 {
@@ -1108,11 +1096,9 @@ void ota_handle_sub1g_version_report(uint32_t sub1g_addr, const char *sub1g_vers
 
 /*---------------------------------------------------------------------------
  Name        : void ota_handle_ct_sub1g_version_report(const char *ct_sub1g_version)
- Input       : ct_sub1g_version - CT Sub1G�汾��
- Output      : ��
- Description : ����CT Sub1G�ϱ��汾�ţ�����OTA������ɺ�ȷ�ϰ汾
-               �жϰ汾���Ƿ���Ŀ��汾һ�£�һ���������ɹ�����һ����ʧ��
-               ע�⣺CT Sub1Gͨ��CMD_CT_SUB1G_VERSION (0x41)�ϱ��汾������0x77
+ Input       : ct_sub1g_version - CT Sub1G版本号
+ Output      : 无
+ Description : 处理CT Sub1G版本报告。
 ---------------------------------------------------------------------------*/
 void ota_handle_ct_sub1g_version_report(const char *ct_sub1g_version)
 {
@@ -1162,9 +1148,9 @@ void ota_handle_ct_sub1g_version_report(const char *ct_sub1g_version)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_force_cancel(void)
- Input       : ��
- Output      : ��
- Description : ��Sub1G�豸����ȡ����������
+ Input       : 无
+ Output      : 无
+ Description : 强制取消OTA升级。
 ---------------------------------------------------------------------------*/
 void ota_force_cancel(void)
 {
@@ -1195,11 +1181,11 @@ void ota_force_cancel(void)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_send_sub1g_init_cmd(uint32_t sub1g_addr, sub1g_ota_type_t type, uint32_t length)
- Input       : sub1g_addr - Sub1G�豸��ַ
-               type - OTA����
-               length - �̼�����
- Output      :
- Description : ����Sub1G OTA��ʼ������ (0x70)
+ Input       : sub1g_addr - Sub1G地址
+               type - OTA类型
+               length - 固件长度
+ Output      : 无
+ Description : 发送Sub1G初始化命令。
 ---------------------------------------------------------------------------*/
 void ota_send_sub1g_init_cmd(uint32_t sub1g_addr, sub1g_ota_type_t type, uint32_t length)
 {
@@ -1243,16 +1229,9 @@ void ota_send_sub1g_init_cmd(uint32_t sub1g_addr, sub1g_ota_type_t type, uint32_
 
 /*---------------------------------------------------------------------------
  Name        : void ota_send_sub1g_data_packet(...)
- Input       : sub1g_addr - Ŀ���豸��ַ
-               type - OTA����
-               total_packets - �ܰ���
-               packet_num - ��ǰ����ţ���1��ʼ��
-               data - ��������
-               data_len - ���ݳ���
- Output      : ��
- Description : ����Sub1G OTA���ݰ� (0x72)
-               ���� = ������(1) + ����(1) + ��Ƭ��(2) + �ڼ�Ƭ(2) + ����(64) + У��(2) = 72
-               У����ӳ����ʼ����71�ֽ�
+ Input       : 数据包参数
+ Output      : 无
+ Description : 发送Sub1G数据包。
 ---------------------------------------------------------------------------*/
 void ota_send_sub1g_data_packet(uint32_t sub1g_addr, sub1g_ota_type_t type, uint16_t total_packets, uint16_t packet_num, const uint8_t *data, uint8_t data_len)
 {
@@ -1311,10 +1290,10 @@ void ota_send_sub1g_data_packet(uint32_t sub1g_addr, sub1g_ota_type_t type, uint
 
 /*---------------------------------------------------------------------------
  Name        : void ota_send_sub1g_cancel_cmd(uint32_t sub1g_addr, sub1g_ota_type_t type)
- Input       : sub1g_addr - Ŀ���豸��ַ
-               type - OTA����
- Output      : ��
- Description : ����Sub1Gȡ���������� (0x74)
+ Input       : sub1g_addr - Sub1G地址
+               type - OTA类型
+ Output      : 无
+ Description : 发送Sub1G取消命令。
 ---------------------------------------------------------------------------*/
 void ota_send_sub1g_cancel_cmd(uint32_t sub1g_addr, sub1g_ota_type_t type)
 {
@@ -1352,9 +1331,9 @@ void ota_send_sub1g_cancel_cmd(uint32_t sub1g_addr, sub1g_ota_type_t type)
 
 /*---------------------------------------------------------------------------
  Name        : void ota_send_sub1g_query_version_cmd(uint32_t sub1g_addr)
- Input       : sub1g_addr - Ŀ���豸��ַ
- Output      : ��
- Description : ����Sub1Gѯ�ʰ汾���� (0x76)
+ Input       : sub1g_addr - Sub1G地址
+ Output      : 无
+ Description : 发送Sub1G版本查询命令。
 ---------------------------------------------------------------------------*/
 void ota_send_sub1g_query_version_cmd(uint32_t sub1g_addr)
 {
@@ -1383,10 +1362,10 @@ void ota_send_sub1g_query_version_cmd(uint32_t sub1g_addr)
 }
 
 /*---------------------------------------------------------------------------
-|| Name        : calculate_crc16
-|| Input       : data - ����ָ��, length - ���ݳ���
-|| Output      : CRC16У��ֵ
-|| Description : ����CRC16У��ֵ��CRC-16/XMODEM��
+ Name        : uint16_t calculate_crc16(...)
+ Input       : 数据参数
+ Output      : CRC16校验值
+ Description : 计算CRC16校验和。
 ---------------------------------------------------------------------------*/
 uint16_t ota_calculate_checksum(const uint8_t *data, uint16_t length)
 {
