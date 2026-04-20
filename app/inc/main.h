@@ -7,6 +7,13 @@
 #include <stdbool.h>
 
 
+#define COMM_MODULE_VERSION "ESP32_C3"
+
+#define PRODUCT_ID "689adc659f04ec32f7642fbb"
+#define PRODUCT_MODEL "GC-CTST3C"
+#define PRODUCT_SECRET "e8127Lx3dG9l3Hy7"
+
+
 #define BOARDCAST_TIME 2 // 广播时间间隔，单位：电网周期数（2个周期后广播，50Hz=40ms，60Hz=33ms）
 
 // #define DEBUG_ENABLE // 调试功能开关，0为关闭，1为开启
@@ -26,7 +33,7 @@
 #define DEBUG_4G_ENABLE
 
 #ifdef DEBUG_4G_ENABLE
-#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R] " fmt, ##__VA_ARGS__)
+#define DEBUG_4G_PRINTF(fmt, ...) printf("[ML307R]" fmt, ##__VA_ARGS__)
 #else
 #define DEBUG_4G_PRINTF(fmt, ...) ((void)0)
 #endif
@@ -130,7 +137,7 @@
 #define SWITCH_INV_BOARCAST 1                      // 同一个微逆广播几次，切换到下一个微逆
 
 // ================= 避免UART1串口的冲突定义环形缓存区 =================
-#define UART1_TX_QUEUE_SIZE 6
+#define UART1_TX_QUEUE_SIZE 2
 #define UART1_TX_MSG_MAX_LEN 100
 
 // 微逆设备属性PIID定义
